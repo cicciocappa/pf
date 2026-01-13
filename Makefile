@@ -27,7 +27,8 @@ SRCS = src/main.c \
        src/camera.c \
        src/obj_loader.c \
        src/asset_manager.c \
-       src/pathfinding_opt.c \
+       src/pathfinding.c \
+       src/pathfinding_navmesh.c \
        src/skeletal/skeletal.c \
        src/ui/ui_renderer.c \
        src/states/state_loader.c \

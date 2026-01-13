@@ -7,6 +7,14 @@
 #include <glad/glad.h>
 #include "terrain.h"
 #include "level.h"
+#include "utils.h"
+
+// Massimo 3x3 chunks, ogni chunk è 64x64
+#define MAX_CHUNKS_X 3
+#define MAX_CHUNKS_Z 3
+#define TEMP_GRID_WIDTH (PATHGRID_SIZE * MAX_CHUNKS_X)   // 192
+#define TEMP_GRID_HEIGHT (PATHGRID_SIZE * MAX_CHUNKS_Z)  // 192
+#define MAX_GRID_CELLS (TEMP_GRID_WIDTH * TEMP_GRID_HEIGHT) // ~36k
 
 // ============================================================================
 // INTERNAL STRUCTURES
@@ -23,7 +31,7 @@ typedef struct PathNode {
 } PathNode;
 
 // Binary heap per open set (min-heap basato su f_cost)
-#define MAX_HEAP_SIZE 4096
+#define MAX_HEAP_SIZE 32768
 
 typedef struct {
     PathNode** nodes;
@@ -32,7 +40,7 @@ typedef struct {
 } PriorityQueue;
 
 // Pool di nodi preallocati per evitare malloc in loop A*
-#define MAX_PATH_NODES 8192
+#define MAX_PATH_NODES 32768
 static PathNode g_node_pool[MAX_PATH_NODES];
 static int g_node_pool_used = 0;
 
@@ -44,6 +52,7 @@ static struct {
     float total_time_ms;
     float max_time_ms;
 } g_stats = {0};
+
 
 // ============================================================================
 // PRIORITY QUEUE (Binary Min-Heap)
@@ -131,19 +140,33 @@ static bool pq_is_empty(PriorityQueue* pq) {
     return pq->size == 0;
 }
 
-// ============================================================================
-// PATHFINDING INITIALIZATION
-// ============================================================================
 
-void pathfinding_init(void) {
-    g_node_pool_used = 0;
-    memset(&g_stats, 0, sizeof(g_stats));
-    printf("[Pathfinding] System initialized\n");
-}
+typedef struct {
+    // Griglia dati (walkability)
+    uint8_t grid[MAX_GRID_CELLS];
+    
+    // Dati per A* (riutilizzati)
+    // Invece di allocare g_costs e closed_set ogni volta:
+    float g_costs[MAX_GRID_CELLS];
+    int visited_tag[MAX_GRID_CELLS]; // Sostituisce il closed_set bitfield
+    //PathNode* node_map[MAX_GRID_CELLS]; // Mappa rapida indice -> puntatore nodo
 
-void pathfinding_cleanup(void) {
-    printf("[Pathfinding] System cleanup\n");
-}
+    // Search ID corrente
+    int current_search_id;
+
+    // Dimensioni attuali della finestra attiva
+    int current_width;
+    int current_height;
+    float current_origin_x;
+    float current_origin_z;
+    float current_cell_size;
+    
+    // Binary Heap preallocato
+    PriorityQueue* pq; 
+    
+} PathfindingContext;
+static PathfindingContext* g_ctx = NULL;
+
 
 // ============================================================================
 // PATHGRID MANAGEMENT
@@ -190,7 +213,7 @@ bool pathgrid_build(PathGrid* pg, unsigned char* walkmap, int walkmap_width, int
     int sample_size = walkmap_width / PATHGRID_SIZE;
     if (sample_size < 1) sample_size = 1;
 
-    float walkable_threshold = 0.75f;  // 75% dei sample devono essere walkable
+    float walkable_threshold = 0.90f;  // 90% dei sample devono essere walkable
 
     for (int gz = 0; gz < PATHGRID_SIZE; gz++) {
         for (int gx = 0; gx < PATHGRID_SIZE; gx++) {
@@ -238,9 +261,85 @@ bool pathgrid_is_walkable(PathGrid* pg, int grid_x, int grid_z) {
     return pg->grid[idx] != 0;
 }
 
+// Converte coordinate world in coordinate della griglia statica attuale
+static bool ctx_world_to_grid(vec3 world_pos, int* out_x, int* out_z) {
+    // Calcola la posizione locale relativa all'origine della finestra attuale
+    float localX = world_pos[0] - g_ctx->current_origin_x;
+    float localZ = world_pos[2] - g_ctx->current_origin_z;
+
+    // Calcola le dimensioni totali in unità world
+    float totalWidth = g_ctx->current_width * g_ctx->current_cell_size;
+    float totalHeight = g_ctx->current_height * g_ctx->current_cell_size;
+
+    // Bounds check: se siamo fuori dalla finestra 3x3 (o 2x2, ecc), errore
+    if (localX < 0.0f || localX >= totalWidth || localZ < 0.0f || localZ >= totalHeight) {
+        return false;
+    }
+
+    // Conversione in indici griglia
+    *out_x = (int)(localX / g_ctx->current_cell_size);
+    *out_z = (int)(localZ / g_ctx->current_cell_size);
+
+    // Clamp di sicurezza (per prevenire overflow di array per floating point error)
+    if (*out_x >= g_ctx->current_width) *out_x = g_ctx->current_width - 1;
+    if (*out_z >= g_ctx->current_height) *out_z = g_ctx->current_height - 1;
+
+    return true;
+}
+
+
+
+
+
+
+
+
+
+
+
 // ============================================================================
-// PATH MANAGEMENT
+// PATH SMOOTHING (String Pulling)
 // ============================================================================
+
+// Helper: Controlla Line of Sight tra due vec3 usando la griglia statica
+static bool check_world_visibility(vec3 start_pos, vec3 end_pos) {
+    int x0, z0, x1, z1;
+    
+    // Converti world -> grid
+    if (!ctx_world_to_grid(start_pos, &x0, &z0)) return false;
+    if (!ctx_world_to_grid(end_pos, &x1, &z1)) return false;
+
+    // Se i punti sono nella stessa cella o adiacenti, sono visibili
+    if (x0 == x1 && z0 == z1) return true;
+
+    // Usa il tuo raycast Bresenham esistente sulla griglia statica
+    // Nota: pathgrid_line_of_sight richiede PathGrid*, ma qui usiamo g_ctx->grid.
+    // Dobbiamo adattare pathgrid_line_of_sight o crearne una versione per g_ctx.
+    // Per semplicità, duplico la logica Bresenham qui adattandola a g_ctx:
+    
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dz = abs(z1 - z0), sz = z0 < z1 ? 1 : -1; 
+    int err = (dx > dz ? dx : -dz) / 2, e2;
+    
+    int cx = x0;
+    int cz = z0;
+
+    while (true) {
+        // Check collisione sulla griglia statica
+        // Ricorda: idx = z * WIDTH + x
+        int idx = cz * TEMP_GRID_WIDTH + cx;
+        if (g_ctx->grid[idx] == 0) return false; // Muro!
+
+        if (cx == x1 && cz == z1) break;
+        
+        e2 = err;
+        if (e2 > -dx) { err -= dz; cx += sx; }
+        if (e2 < dz) { err += dx; cz += sz; }
+    }
+    return true;
+}
+
+
 
 Path* path_create(int initial_capacity) {
     Path* path = (Path*)malloc(sizeof(Path));
@@ -258,6 +357,286 @@ Path* path_create(int initial_capacity) {
 
     return path;
 }
+
+
+void pathfinding_init(void) {
+    g_ctx = (PathfindingContext*)calloc(1, sizeof(PathfindingContext));
+    
+    // Prealloca la Priority Queue al massimo
+    g_ctx->pq = pq_create(MAX_HEAP_SIZE);
+    
+    // Inizializza il search ID
+    g_ctx->current_search_id = 0;
+    
+    // Inizializza array visited a 0
+    memset(g_ctx->visited_tag, 0, sizeof(g_ctx->visited_tag));
+
+    // Aumenta il pool di nodi! 
+    // NOTA: 8192 nodi sono pochi per una griglia 192x192 (36k celle).
+    // Se il percorso è complesso, A* potrebbe esplorare quasi tutte le celle.
+    // Suggerisco di aumentare MAX_PATH_NODES almeno a 16384 o 32768
+    
+    printf("[Pathfinding] Static context initialized (Max grid: %dx%d)\n", 
+           TEMP_GRID_WIDTH, TEMP_GRID_HEIGHT);
+}
+
+// Restituisce true se successo, false se errore
+static bool setup_static_grid(struct Level* lvl, vec3 start, vec3 goal) {
+        // Calcola bounding box in coordinate world
+    float minX = fminf(start[0], goal[0]);
+    float maxX = fmaxf(start[0], goal[0]);
+    float minZ = fminf(start[2], goal[2]);
+    float maxZ = fmaxf(start[2], goal[2]);
+
+    // Espandi ai bordi dei chunk (arrotonda ai chunk interi)
+    float chunkSize = lvl->chunkSize;
+
+    // Trova indici chunk
+    int startChunkX = (int)floorf((minX - lvl->originX) / chunkSize);
+    int startChunkZ = (int)floorf((minZ - lvl->originZ) / chunkSize);
+    int endChunkX = (int)floorf((maxX - lvl->originX) / chunkSize);
+    int endChunkZ = (int)floorf((maxZ - lvl->originZ) / chunkSize);
+    
+    // ... clamp indici chunk ...
+
+    int chunksX = endChunkX - startChunkX + 1;
+    int chunksZ = endChunkZ - startChunkZ + 1;
+    if (chunksX > MAX_CHUNKS_X) chunksX = MAX_CHUNKS_X;
+    if (chunksZ > MAX_CHUNKS_Z) chunksZ = MAX_CHUNKS_Z;
+
+    // Imposta metadati nel contesto statico
+    g_ctx->current_width = chunksX * PATHGRID_SIZE;
+    g_ctx->current_height = chunksZ * PATHGRID_SIZE;
+    g_ctx->current_origin_x = lvl->originX + startChunkX * lvl->chunkSize;
+    g_ctx->current_origin_z = lvl->originZ + startChunkZ * lvl->chunkSize;
+    g_ctx->current_cell_size = lvl->chunkSize / PATHGRID_SIZE;
+
+    // Incrementa Search ID per invalidare i dati della ricerca precedente
+    g_ctx->current_search_id++;
+    if (g_ctx->current_search_id == 0) {
+        // Gestione overflow (rarissimo): resetta tutto
+        memset(g_ctx->visited_tag, 0, sizeof(g_ctx->visited_tag));
+        g_ctx->current_search_id = 1;
+    }
+
+    // Copia i dati dai chunk alla grid statica
+    // NOTA: Qui non serve memset a 0 della grid se copiamo tutto, 
+    // ma se ci sono "buchi" (chunk mancanti) bisogna fare attenzione.
+    
+    for (int cz = 0; cz < chunksZ; cz++) {
+        for (int cx = 0; cx < chunksX; cx++) {
+             int chunkIdxX = startChunkX + cx;
+            int chunkIdxZ = startChunkZ + cz;
+
+            // Bounds check
+            if (chunkIdxX < 0 || chunkIdxX >= lvl->chunksCountX ||
+                chunkIdxZ < 0 || chunkIdxZ >= lvl->chunksCountZ) {
+                continue;
+            }
+
+            
+            struct Terrain* chunk = &lvl->chunks[chunkIdxZ * lvl->chunksCountX + chunkIdxX];
+            
+            // Calcola offset nella griglia statica (larga TEMP_GRID_WIDTH)
+            int destOffsetX = cx * PATHGRID_SIZE;
+            int destOffsetZ = cz * PATHGRID_SIZE;
+
+            if (chunk && chunk->pathgrid.grid) {
+                // Copia riga per riga per mantenere la continuità
+                for (int z = 0; z < PATHGRID_SIZE; z++) {
+                     // Calcola puntatori per memcpy veloce
+                     uint8_t* dest = &g_ctx->grid[(destOffsetZ + z) * TEMP_GRID_WIDTH + destOffsetX];
+                     uint8_t* src = &chunk->pathgrid.grid[z * PATHGRID_SIZE];
+                     memcpy(dest, src, PATHGRID_SIZE);
+                }
+            } else {
+                // Chunk non caricato? Segna come non camminabile
+                for (int z = 0; z < PATHGRID_SIZE; z++) {
+                    uint8_t* dest = &g_ctx->grid[(destOffsetZ + z) * TEMP_GRID_WIDTH + destOffsetX];
+                    memset(dest, 0, PATHGRID_SIZE);
+                }
+            }
+        }
+    }
+    
+    return true;
+}
+
+
+
+static float heuristic_euclidean(int x1, int z1, int x2, int z2) {
+    int dx = x2 - x1;
+    int dz = z2 - z1;
+    return sqrtf(dx * dx + dz * dz);
+}
+
+static PathNode* get_node_from_pool(int x, int z) {
+    if (g_node_pool_used >= MAX_PATH_NODES) {
+        printf("[Pathfinding] ERROR: Node pool exhausted!\n");
+        return NULL;
+    }
+    PathNode* node = &g_node_pool[g_node_pool_used++];
+    node->x = x;
+    node->z = z;
+    node->g_cost = FLT_MAX;
+    node->h_cost = 0.0f;
+    node->f_cost = FLT_MAX;
+    node->parent = NULL;
+    node->heap_index = -1;
+    return node;
+}
+
+// Converte coordinate della griglia statica in coordinate World
+static void ctx_grid_to_world(int grid_x, int grid_z, struct Level* lvl, vec3 out_world) {
+    // Calcola X e Z usando l'origine e la cell_size memorizzate nel contesto
+    out_world[0] = g_ctx->current_origin_x + (grid_x + 0.5f) * g_ctx->current_cell_size;
+    out_world[2] = g_ctx->current_origin_z + (grid_z + 0.5f) * g_ctx->current_cell_size;
+    
+    // Calcola Y usando l'heightmap del livello
+    out_world[1] = level_get_height(lvl, out_world[0], out_world[2]);
+}
+
+static Path* reconstruct_path_static(PathNode* goal_node, struct Level* lvl) {
+    // 1. Conta i nodi risalendo i parent
+    int count = 0;
+    PathNode* node = goal_node;
+    while (node != NULL) {
+        count++;
+        node = node->parent;
+    }
+
+    if (count == 0) return NULL;
+
+    // 2. Crea l'oggetto Path finale
+    Path* path = path_create(count);
+    if (!path) return NULL;
+
+    // Impostiamo subito il count finale, così possiamo accedere all'array direttamente
+    path->waypoint_count = count;
+
+    // 3. Riempi i waypoint direttamente in ordine inverso
+    // (Dal Goal allo Start, ma scrivendo dall'ultimo indice al primo)
+    int i = count - 1;
+    node = goal_node;
+    
+    while (node != NULL) {
+        // Scriviamo direttamente nella memoria del Path finale
+        // Nota: path->waypoints[i] è un vec3, che è un array float[3]
+        ctx_grid_to_world(node->x, node->z, lvl, path->waypoints[i]);
+        
+        i--;
+        node = node->parent;
+    }
+
+    return path;
+}
+
+
+static Path* astar_static_context(vec3 start, vec3 goal, struct Level* lvl) {
+    // Reset pool nodi e heap
+    g_node_pool_used = 0;
+    g_ctx->pq->size = 0; 
+
+    int start_x, start_z, goal_x, goal_z;
+
+    // 1. Converti coordinate World -> Grid
+    if (!ctx_world_to_grid(start, &start_x, &start_z)) {
+        printf("[Pathfinding] Start position outside active window (%.2f, %.2f)\n", start[0], start[2]);
+        return NULL;
+    }
+
+    if (!ctx_world_to_grid(goal, &goal_x, &goal_z)) {
+        printf("[Pathfinding] Goal position outside active window (%.2f, %.2f)\n", goal[0], goal[2]);
+        return NULL;
+    }
+
+    // 2. Calcola indici lineari (UNA VOLTA SOLA)
+    // Nota: Usiamo sempre TEMP_GRID_WIDTH (192) per l'indicizzazione dell'array statico
+    int start_idx = start_z * TEMP_GRID_WIDTH + start_x;
+    int goal_idx = goal_z * TEMP_GRID_WIDTH + goal_x;
+
+    // 3. Verifica walkability immediata (Fail-Fast)
+    if (g_ctx->grid[start_idx] == 0) {
+         //printf("[Pathfinding] Start position is not walkable\n");
+         return NULL;
+    }
+    if (g_ctx->grid[goal_idx] == 0) {
+         //printf("[Pathfinding] Goal position is not walkable\n");
+         return NULL;
+    }
+
+    // 4. Setup nodo start
+    PathNode* start_node = get_node_from_pool(start_x, start_z);
+    if (!start_node) return NULL; // Safety check se il pool esplode
+
+    start_node->g_cost = 0.0f;
+    // Assicurati che heuristic sia definita (es. heuristic_euclidean)
+    start_node->h_cost = heuristic_euclidean(start_x, start_z, goal_x, goal_z);
+    start_node->f_cost = start_node->h_cost;
+    
+    // 5. Inseriamo nell'array "visited" e "g_costs"
+    // CORREZIONE: Qui usiamo start_idx già calcolato sopra, senza "int" davanti
+    g_ctx->visited_tag[start_idx] = g_ctx->current_search_id; 
+    g_ctx->g_costs[start_idx] = 0.0f;
+    
+    pq_push(g_ctx->pq, start_node);
+
+    // Direzioni: 8-connected
+    int dx[] = {0, 0, 1, -1, 1, -1, 1, -1};
+    int dz[] = {1, -1, 0, 0, 1, 1, -1, -1};
+    float costs[] = {1.0f, 1.0f, 1.0f, 1.0f, 1.414f, 1.414f, 1.414f, 1.414f};
+
+    // 6. Loop A* principale
+    while (!pq_is_empty(g_ctx->pq)) {
+        PathNode* current = pq_pop(g_ctx->pq);
+
+        if (current->x == goal_x && current->z == goal_z) {
+            return reconstruct_path_static(current, lvl);
+        }
+
+        // Espansione vicini
+        for (int i = 0; i < 8; i++) {
+            int nx = current->x + dx[i];
+            int nz = current->z + dz[i];
+
+            // Bounds check usando le dimensioni ATTUALI della finestra (non 192, ma la larghezza reale caricata)
+            if (nx < 0 || nx >= g_ctx->current_width || nz < 0 || nz >= g_ctx->current_height) continue;
+
+            int n_idx = nz * TEMP_GRID_WIDTH + nx;
+
+            // Walkability check su static grid
+            if (g_ctx->grid[n_idx] == 0) continue;
+
+            float new_g = current->g_cost + costs[i];
+
+            // Check se già visitato in QUESTO search ID
+            bool visited_in_this_search = (g_ctx->visited_tag[n_idx] == g_ctx->current_search_id);
+            
+            // Se visitato e il costo non è migliore, skip
+            if (visited_in_this_search && new_g >= g_ctx->g_costs[n_idx]) {
+                continue;
+            }
+
+            // Trovato percorso migliore o nuovo nodo
+            PathNode* neighbor = get_node_from_pool(nx, nz);
+            if (!neighbor) return NULL; // Pool esaurito, path fallito
+
+            neighbor->g_cost = new_g;
+            neighbor->h_cost = heuristic_euclidean(nx, nz, goal_x, goal_z);
+            neighbor->f_cost = new_g + neighbor->h_cost;
+            neighbor->parent = current;
+
+            // Aggiorna tag e costi
+            g_ctx->visited_tag[n_idx] = g_ctx->current_search_id;
+            g_ctx->g_costs[n_idx] = new_g;
+            
+            pq_push(g_ctx->pq, neighbor);
+        }
+    }
+    
+    return NULL;
+}
+
 
 bool path_add_waypoint(Path* path, vec3 waypoint) {
     if (!path) return false;
@@ -284,24 +663,6 @@ void path_free(Path* path) {
     free(path);
 }
 
-Path* path_clone(Path* path) {
-    if (!path) return NULL;
-
-    Path* clone = path_create(path->capacity);
-    if (!clone) return NULL;
-
-    for (int i = 0; i < path->waypoint_count; i++) {
-        path_add_waypoint(clone, path->waypoints[i]);
-    }
-    clone->layer_id = path->layer_id;
-
-    return clone;
-}
-
-// ============================================================================
-// COORDINATE CONVERSION
-// ============================================================================
-
 bool world_to_grid(struct Terrain* chunk, vec3 world_pos, int* out_x, int* out_z) {
     if (!chunk || !out_x || !out_z) return false;
 
@@ -325,359 +686,66 @@ bool world_to_grid(struct Terrain* chunk, vec3 world_pos, int* out_x, int* out_z
     return true;
 }
 
-void grid_to_world(struct Terrain* chunk, int grid_x, int grid_z, vec3 out_world) {
-    if (!chunk) return;
-
-    // Grid → UV (centro della cella)
-    float u = (grid_x + 0.5f) / PATHGRID_SIZE;
-    float v = (grid_z + 0.5f) / PATHGRID_SIZE;
-
-    // UV → World
-    out_world[0] = chunk->offsetX + u * chunk->worldSize;
-    out_world[2] = chunk->offsetZ + v * chunk->worldSize;
-
-    // Y da heightmap
-    out_world[1] = terrain_get_height(chunk, out_world[0], out_world[2]);
-}
-
-// ============================================================================
-// A* PATHFINDING
-// ============================================================================
-
-static float heuristic_euclidean(int x1, int z1, int x2, int z2) {
-    int dx = x2 - x1;
-    int dz = z2 - z1;
-    return sqrtf(dx * dx + dz * dz);
-}
-
-static PathNode* get_node_from_pool(int x, int z) {
-    if (g_node_pool_used >= MAX_PATH_NODES) {
-        printf("[Pathfinding] ERROR: Node pool exhausted!\n");
-        return NULL;
+// Algoritmo di Bresenham o raymarching sulla griglia per vedere se la linea è libera
+bool pathgrid_line_of_sight(PathGrid* pg, int x0, int z0, int x1, int z1) {
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dz = abs(z1 - z0), sz = z0 < z1 ? 1 : -1; 
+    int err = (dx > dz ? dx : -dz) / 2, e2;
+ 
+    while (true) {
+        if (!pathgrid_is_walkable(pg, x0, z0)) return false;
+        if (x0 == x1 && z0 == z1) break;
+        e2 = err;
+        if (e2 > -dx) { err -= dz; x0 += sx; }
+        if (e2 < dz) { err += dx; z0 += sz; }
     }
-    PathNode* node = &g_node_pool[g_node_pool_used++];
-    node->x = x;
-    node->z = z;
-    node->g_cost = FLT_MAX;
-    node->h_cost = 0.0f;
-    node->f_cost = FLT_MAX;
-    node->parent = NULL;
-    node->heap_index = -1;
-    return node;
-}
-
-
-
-
-// ============================================================================
-// MULTI-CHUNK PATHFINDING (Griglia temporanea a finestra)
-// ============================================================================
-
-// Struttura per griglia temporanea multi-chunk
-typedef struct {
-    uint8_t* grid;
-    int width, height;      // Dimensioni in celle
-    float originX, originZ; // Origine world (angolo min)
-    float cellSize;         // Dimensione cella in world units
-    int chunksX, chunksZ;   // Numero di chunk coperti
-} TempPathGrid;
-
-// Converte coordinate world in coordinate griglia temporanea
-static bool temp_world_to_grid(TempPathGrid* tpg, vec3 world_pos, int* out_x, int* out_z) {
-    float localX = world_pos[0] - tpg->originX;
-    float localZ = world_pos[2] - tpg->originZ;
-
-    // Bounds check
-    float totalWidth = tpg->width * tpg->cellSize;
-    float totalHeight = tpg->height * tpg->cellSize;
-    if (localX < 0.0f || localX >= totalWidth || localZ < 0.0f || localZ >= totalHeight) {
-        return false;
-    }
-
-    *out_x = (int)(localX / tpg->cellSize);
-    *out_z = (int)(localZ / tpg->cellSize);
-
-    // Clamp per sicurezza
-    if (*out_x >= tpg->width) *out_x = tpg->width - 1;
-    if (*out_z >= tpg->height) *out_z = tpg->height - 1;
-
     return true;
 }
 
-// Converte coordinate griglia temporanea in world (centro della cella)
-static void temp_grid_to_world(TempPathGrid* tpg, int grid_x, int grid_z, struct Level* lvl, vec3 out_world) {
-    out_world[0] = tpg->originX + (grid_x + 0.5f) * tpg->cellSize;
-    out_world[2] = tpg->originZ + (grid_z + 0.5f) * tpg->cellSize;
-    out_world[1] = level_get_height(lvl, out_world[0], out_world[2]);
-}
+void path_smooth(Path* path) {
+    if (!path || path->waypoint_count <= 2) return;
 
-// Verifica se una cella è walkable nella griglia temporanea
-static bool temp_is_walkable(TempPathGrid* tpg, int x, int z) {
-    if (x < 0 || x >= tpg->width || z < 0 || z >= tpg->height) return false;
-    return tpg->grid[z * tpg->width + x] != 0;
-}
+    // Creiamo un nuovo path temporaneo per i punti ottimizzati
+    // Nel caso peggiore avrà la stessa dimensione dell'originale
+    vec3* new_waypoints = (vec3*)malloc(path->capacity * sizeof(vec3));
+    int new_count = 0;
 
-// Costruisce la griglia temporanea copiando dai chunk coinvolti
-static TempPathGrid* build_temp_grid(struct Level* lvl, vec3 start, vec3 goal) {
-    // Calcola bounding box in coordinate world
-    float minX = fminf(start[0], goal[0]);
-    float maxX = fmaxf(start[0], goal[0]);
-    float minZ = fminf(start[2], goal[2]);
-    float maxZ = fmaxf(start[2], goal[2]);
+    // Aggiungi sempre il primo punto (Start)
+    glm_vec3_copy(path->waypoints[0], new_waypoints[0]);
+    new_count++;
 
-    // Espandi ai bordi dei chunk (arrotonda ai chunk interi)
-    float chunkSize = lvl->chunkSize;
+    int current_idx = 0;
 
-    // Trova indici chunk
-    int startChunkX = (int)floorf((minX - lvl->originX) / chunkSize);
-    int startChunkZ = (int)floorf((minZ - lvl->originZ) / chunkSize);
-    int endChunkX = (int)floorf((maxX - lvl->originX) / chunkSize);
-    int endChunkZ = (int)floorf((maxZ - lvl->originZ) / chunkSize);
-
-    // Clamp agli indici validi
-    if (startChunkX < 0) startChunkX = 0;
-    if (startChunkZ < 0) startChunkZ = 0;
-    if (endChunkX >= lvl->chunksCountX) endChunkX = lvl->chunksCountX - 1;
-    if (endChunkZ >= lvl->chunksCountZ) endChunkZ = lvl->chunksCountZ - 1;
-
-    // Numero di chunk da coprire
-    int chunksX = endChunkX - startChunkX + 1;
-    int chunksZ = endChunkZ - startChunkZ + 1;
-
-    // Limita a 3x3 max
-    if (chunksX > 3) chunksX = 3;
-    if (chunksZ > 3) chunksZ = 3;
-
-    // Calcola dimensioni griglia temporanea
-    int gridWidth = chunksX * PATHGRID_SIZE;
-    int gridHeight = chunksZ * PATHGRID_SIZE;
-
-    // Alloca struttura
-    TempPathGrid* tpg = (TempPathGrid*)malloc(sizeof(TempPathGrid));
-    if (!tpg) return NULL;
-
-    tpg->grid = (uint8_t*)malloc(gridWidth * gridHeight * sizeof(uint8_t));
-    if (!tpg->grid) {
-        free(tpg);
-        return NULL;
-    }
-
-    tpg->width = gridWidth;
-    tpg->height = gridHeight;
-    tpg->chunksX = chunksX;
-    tpg->chunksZ = chunksZ;
-    tpg->originX = lvl->originX + startChunkX * chunkSize;
-    tpg->originZ = lvl->originZ + startChunkZ * chunkSize;
-    tpg->cellSize = chunkSize / PATHGRID_SIZE;
-
-    // Inizializza tutto come non-walkable
-    memset(tpg->grid, 0, gridWidth * gridHeight);
-
-    // Copia dati dai chunk
-    for (int cz = 0; cz < chunksZ; cz++) {
-        for (int cx = 0; cx < chunksX; cx++) {
-            int chunkIdxX = startChunkX + cx;
-            int chunkIdxZ = startChunkZ + cz;
-
-            // Bounds check
-            if (chunkIdxX < 0 || chunkIdxX >= lvl->chunksCountX ||
-                chunkIdxZ < 0 || chunkIdxZ >= lvl->chunksCountZ) {
-                continue;
+    while (current_idx < path->waypoint_count - 1) {
+        // Cerca il punto più lontano visibile dal corrente
+        // Partiamo dalla fine e torniamo indietro verso current
+        bool found_shortcut = false;
+        
+        for (int check_idx = path->waypoint_count - 1; check_idx > current_idx + 1; check_idx--) {
+            if (check_world_visibility(path->waypoints[current_idx], path->waypoints[check_idx])) {
+                // Trovato shortcut! Il punto check_idx diventa il prossimo nel path
+                current_idx = check_idx;
+                glm_vec3_copy(path->waypoints[current_idx], new_waypoints[new_count]);
+                new_count++;
+                found_shortcut = true;
+                break;
             }
+        }
 
-            struct Terrain* chunk = &lvl->chunks[chunkIdxZ * lvl->chunksCountX + chunkIdxX];
-            if (!chunk->pathgrid.grid) continue;
-
-            // Copia pathgrid del chunk nella posizione corretta
-            int destOffsetX = cx * PATHGRID_SIZE;
-            int destOffsetZ = cz * PATHGRID_SIZE;
-
-            for (int z = 0; z < PATHGRID_SIZE; z++) {
-                for (int x = 0; x < PATHGRID_SIZE; x++) {
-                    int srcIdx = z * PATHGRID_SIZE + x;
-                    int destIdx = (destOffsetZ + z) * gridWidth + (destOffsetX + x);
-                    tpg->grid[destIdx] = chunk->pathgrid.grid[srcIdx];
-                }
-            }
+        // Se non trovo scorciatoie lunghe, devo per forza andare al punto successivo
+        if (!found_shortcut) {
+            current_idx++;
+            glm_vec3_copy(path->waypoints[current_idx], new_waypoints[new_count]);
+            new_count++;
         }
     }
 
-    printf("[Pathfinding] Built temp grid %dx%d (%dx%d chunks) at (%.1f, %.1f)\n",
-           gridWidth, gridHeight, chunksX, chunksZ, tpg->originX, tpg->originZ);
-
-    return tpg;
-}
-
-static void free_temp_grid(TempPathGrid* tpg) {
-    if (!tpg) return;
-    if (tpg->grid) free(tpg->grid);
-    free(tpg);
-}
-
-// Ricostruisce path dalla griglia temporanea
-static Path* reconstruct_path_temp(PathNode* goal_node, TempPathGrid* tpg, struct Level* lvl) {
-    // Conta nodi
-    int count = 0;
-    PathNode* node = goal_node;
-    while (node != NULL) {
-        count++;
-        node = node->parent;
-    }
-
-    // Crea path
-    Path* path = path_create(count);
-    if (!path) return NULL;
-
-    // Riempi waypoints in ordine inverso
-    vec3* waypoints_temp = (vec3*)malloc(count * sizeof(vec3));
-    int i = count - 1;
-    node = goal_node;
-    while (node != NULL) {
-        temp_grid_to_world(tpg, node->x, node->z, lvl, waypoints_temp[i]);
-        i--;
-        node = node->parent;
-    }
-
-    // Aggiungi al path
-    for (i = 0; i < count; i++) {
-        path_add_waypoint(path, waypoints_temp[i]);
-    }
-
-    free(waypoints_temp);
-    return path;
-}
-
-// A* sulla griglia temporanea
-static Path* astar_on_temp_grid(TempPathGrid* tpg, struct Level* lvl, vec3 start, vec3 goal) {
-    // Reset node pool
-    g_node_pool_used = 0;
-
-    // Converti start/goal in grid coords
-    int start_x, start_z, goal_x, goal_z;
-    if (!temp_world_to_grid(tpg, start, &start_x, &start_z)) {
-        printf("[Pathfinding] Start position outside temp grid\n");
-        return NULL;
-    }
-    if (!temp_world_to_grid(tpg, goal, &goal_x, &goal_z)) {
-        printf("[Pathfinding] Goal position outside temp grid\n");
-        return NULL;
-    }
-
-    // Verifica walkability
-    if (!temp_is_walkable(tpg, start_x, start_z)) {
-        printf("[Pathfinding] Start position not walkable (%d, %d)\n", start_x, start_z);
-        return NULL;
-    }
-    if (!temp_is_walkable(tpg, goal_x, goal_z)) {
-        printf("[Pathfinding] Goal position not walkable (%d, %d)\n", goal_x, goal_z);
-        return NULL;
-    }
-
-    // Inizializza A*
-    PriorityQueue* open_set = pq_create(MAX_HEAP_SIZE);
-
-    // Closed set come bitfield dinamico
-    int bitfield_size = (tpg->width * tpg->height + 63) / 64;
-    uint64_t* closed_set = (uint64_t*)calloc(bitfield_size, sizeof(uint64_t));
-
-    // g_costs array dinamico
-    float* g_costs = (float*)malloc(tpg->width * tpg->height * sizeof(float));
-    for (int i = 0; i < tpg->width * tpg->height; i++) {
-        g_costs[i] = FLT_MAX;
-    }
-
-    // Crea start node
-    PathNode* start_node = get_node_from_pool(start_x, start_z);
-    if (!start_node) {
-        pq_destroy(open_set);
-        free(closed_set);
-        free(g_costs);
-        return NULL;
-    }
-    start_node->g_cost = 0.0f;
-    start_node->h_cost = heuristic_euclidean(start_x, start_z, goal_x, goal_z);
-    start_node->f_cost = start_node->h_cost;
-    g_costs[start_z * tpg->width + start_x] = 0.0f;
-
-    pq_push(open_set, start_node);
-
-    // Direzioni: 8-connected
-    int dx[] = {0, 0, 1, -1, 1, -1, 1, -1};
-    int dz[] = {1, -1, 0, 0, 1, 1, -1, -1};
-    float costs[] = {1.0f, 1.0f, 1.0f, 1.0f, 1.414f, 1.414f, 1.414f, 1.414f};
-
-    PathNode* goal_node = NULL;
-
-    // A* loop
-    while (!pq_is_empty(open_set)) {
-        PathNode* current = pq_pop(open_set);
-
-        // Goal raggiunto?
-        if (current->x == goal_x && current->z == goal_z) {
-            goal_node = current;
-            break;
-        }
-
-        // Aggiungi a closed set
-        int bit_idx = current->z * tpg->width + current->x;
-        closed_set[bit_idx / 64] |= (1ULL << (bit_idx % 64));
-
-        // Espandi vicini
-        for (int i = 0; i < 8; i++) {
-            int nx = current->x + dx[i];
-            int nz = current->z + dz[i];
-
-            // Bounds check
-            if (nx < 0 || nx >= tpg->width || nz < 0 || nz >= tpg->height) {
-                continue;
-            }
-
-            // Walkability check
-            if (!temp_is_walkable(tpg, nx, nz)) {
-                continue;
-            }
-
-            // Closed check
-            int n_bit_idx = nz * tpg->width + nx;
-            if (closed_set[n_bit_idx / 64] & (1ULL << (n_bit_idx % 64))) {
-                continue;
-            }
-
-            // Calcola costi
-            float new_g = current->g_cost + costs[i];
-
-            // Se abbiamo già un g_cost migliore, skip
-            if (new_g >= g_costs[n_bit_idx]) {
-                continue;
-            }
-
-            // Crea neighbor node
-            PathNode* neighbor = get_node_from_pool(nx, nz);
-            if (!neighbor) break;
-
-            neighbor->g_cost = new_g;
-            neighbor->h_cost = heuristic_euclidean(nx, nz, goal_x, goal_z);
-            neighbor->f_cost = neighbor->g_cost + neighbor->h_cost;
-            neighbor->parent = current;
-
-            g_costs[n_bit_idx] = new_g;
-            pq_push(open_set, neighbor);
-        }
-    }
-
-    // Ricostruisci path se trovato
-    Path* result = NULL;
-    if (goal_node) {
-        result = reconstruct_path_temp(goal_node, tpg, lvl);
-        printf("[Pathfinding] Path found: %d waypoints\n", result ? result->waypoint_count : 0);
-    } else {
-        printf("[Pathfinding] No path found\n");
-    }
-
-    pq_destroy(open_set);
-    free(closed_set);
-    free(g_costs);
-    return result;
+    // Sostituisci i waypoint vecchi con quelli nuovi
+    free(path->waypoints);
+    path->waypoints = new_waypoints;
+    path->waypoint_count = new_count;
+    
+  
 }
 
 Path* pathfinding_find_path(struct Level* lvl, vec3 start, vec3 goal, int zone_id) {
@@ -685,7 +753,7 @@ Path* pathfinding_find_path(struct Level* lvl, vec3 start, vec3 goal, int zone_i
 
     if (!lvl) return NULL;
 
-    // Verifica che start e goal siano nel livello
+    // 1. Identifica i chunk di partenza e arrivo per validazione di base
     struct Terrain* start_chunk = level_get_chunk_at(lvl, start[0], start[2]);
     struct Terrain* goal_chunk = level_get_chunk_at(lvl, goal[0], goal[2]);
 
@@ -698,31 +766,49 @@ Path* pathfinding_find_path(struct Level* lvl, vec3 start, vec3 goal, int zone_i
         return NULL;
     }
 
-    // Costruisci griglia temporanea che copre i chunk coinvolti
-    TempPathGrid* tpg = build_temp_grid(lvl, start, goal);
-    if (!tpg) {
-        printf("[Pathfinding] Failed to build temp grid\n");
+    // 2. OTTIMIZZAZIONE: Line of Sight (Raycast)
+    // Se siamo nello stesso chunk, prova prima a tracciare una linea retta.
+    // Se la linea è libera, evita completamente il costo di setup_static_grid e A*.
+    if (start_chunk == goal_chunk) {
+        int sx, sz, gx, gz;
+        // Nota: qui usiamo la funzione locale del chunk, non quella globale del contesto
+        if (world_to_grid(start_chunk, start, &sx, &sz) && 
+            world_to_grid(start_chunk, goal, &gx, &gz)) {
+            
+            // Supponendo tu abbia implementato pathgrid_line_of_sight come discusso prima
+            if (pathgrid_line_of_sight(&start_chunk->pathgrid, sx, sz, gx, gz)) {
+                 Path* simple_path = path_create(2);
+                 path_add_waypoint(simple_path, start); // Start
+                 path_add_waypoint(simple_path, goal);  // End
+                 return simple_path;
+            }
+        }
+    }
+
+    // ========================================================================
+    // 3. PREPARAZIONE CONTESTO (Il punto che chiedevi)
+    // ========================================================================
+    // Qui popoliamo g_ctx->grid copiando i dati dai chunk necessari (max 3x3).
+    // Questo sovrascrive i dati della richiesta precedente nel buffer statico.
+    if (!setup_static_grid(lvl, start, goal)) {
+        printf("[Pathfinding] Failed to build static grid context\n");
         return NULL;
     }
 
-    // Esegui A* sulla griglia temporanea
-    Path* path = astar_on_temp_grid(tpg, lvl, start, goal);
-
-    // Libera griglia temporanea
-    free_temp_grid(tpg);
-
+    // ========================================================================
+    // 4. ESECUZIONE A*
+    // ========================================================================
+    // Ora che g_ctx è pronto, lanciamo l'algoritmo.
+    // Non passiamo più griglie temporanee, perché A* leggerà da g_ctx globale.
+    Path* path = astar_static_context(start, goal, lvl);
+    
+    // 5. SMOOTHING
+    if (path) {
+        path_smooth(path);
+    }
+    
     return path;
 }
-
-// ============================================================================
-// PATH SMOOTHING
-// ============================================================================
-
-void path_smooth(Path* path, struct Level* lvl) {
-    // TODO: Implementare string-pulling
-    // Per ora no-op
-}
-
 // ============================================================================
 // DEBUG UTILITIES
 // ============================================================================
@@ -851,4 +937,55 @@ void pathfinding_print_stats(void) {
 
 void pathfinding_reset_stats(void) {
     memset(&g_stats, 0, sizeof(g_stats));
+}
+
+void pathfinding_run_benchmark(struct Level* lvl) {
+    int iterations = 1000; // Numero di path da calcolare
+    int found_count = 0;
+    
+    printf("=== PATHFINDING BENCHMARK (%d iterations) ===\n", iterations);
+    
+    // Seed random fisso per ripetibilità (stessi path su Old vs New)
+    srand(12345); 
+
+    double start_time = get_time_ms();
+
+    for (int i = 0; i < iterations; i++) {
+        // Genera due punti casuali nel mondo
+        // Assumiamo che il mondo sia grosso modo entro i bound del livello
+        float margin = 10.0f;
+        float minX = lvl->originX + margin;
+        float maxX = lvl->originX + (lvl->chunksCountX * lvl->chunkSize) - margin;
+        float minZ = lvl->originZ + margin;
+        float maxZ = lvl->originZ + (lvl->chunksCountZ * lvl->chunkSize) - margin;
+
+        float r1 = (float)rand() / RAND_MAX;
+        float r2 = (float)rand() / RAND_MAX;
+        float r3 = (float)rand() / RAND_MAX;
+        float r4 = (float)rand() / RAND_MAX;
+
+        vec3 start = { minX + r1 * (maxX - minX), 0, minZ + r2 * (maxZ - minZ) };
+        vec3 goal  = { minX + r3 * (maxX - minX), 0, minZ + r4 * (maxZ - minZ) };
+
+        // Aggiorna Y (opzionale, se il pathfinding lo richiede per start/goal)
+        start[1] = level_get_height(lvl, start[0], start[2]);
+        goal[1]  = level_get_height(lvl, goal[0], goal[2]);
+
+        // Chiama il pathfinding
+        Path* p = pathfinding_find_path(lvl, start, goal, 0);
+        
+        if (p) {
+            found_count++;
+            path_free(p); // Importante: libera subito per non finire la RAM nel test
+        }
+    }
+
+    double end_time = get_time_ms();
+    double total_time = end_time - start_time;
+    double avg_time = total_time / iterations;
+
+    printf("Total Time: %.2f ms\n", total_time);
+    printf("Avg Time per Path: %.4f ms\n", avg_time);
+    printf("Paths Found: %d/%d\n", found_count, iterations);
+    printf("=============================================\n");
 }

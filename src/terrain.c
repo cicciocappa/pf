@@ -461,8 +461,8 @@ void terrain_debug_draw(Terrain* t, mat4 viewProj, int step) {
         glBindVertexArray(0);
         free(vertices);
 
-        printf("[TerrainDebug] Created %d points (step=%d, grid=%dx%d)\n",
-               debug_point_count, step, t->gridWidth, t->gridHeight);
+        //printf("[TerrainDebug] Created %d points (step=%d, grid=%dx%d)\n",
+        //       debug_point_count, step, t->gridWidth, t->gridHeight);
     }
 
     // Disegna i punti
@@ -479,7 +479,7 @@ void terrain_debug_draw(Terrain* t, mat4 viewProj, int step) {
 
 void terrain_debug_draw_walkmap(Terrain* t, mat4 viewProj, int step) {
     if (!t->walkMap || !t->heightMap) {
-        printf("[TerrainDebug] No walkmap or heightmap available\n");
+        //printf("[TerrainDebug] No walkmap or heightmap available\n");
         return;
     }
     if (step < 1) step = 1;
@@ -555,8 +555,8 @@ void terrain_debug_draw_walkmap(Terrain* t, mat4 viewProj, int step) {
     glBindVertexArray(0);
     free(vertices);
 
-    printf("[TerrainDebug] Created walkmap visualization: %d points (step=%d)\n",
-           debug_colored_point_count, step);
+    //printf("[TerrainDebug] Created walkmap visualization: %d points (step=%d)\n",
+    //       debug_colored_point_count, step);
 
     // Disegna i punti
     glUseProgram(debug_colored_shader);
@@ -649,7 +649,7 @@ void terrain_debug_draw_pathgrid(Terrain* t, mat4 viewProj) {
         glBindVertexArray(0);
         free(vertices);
 
-        printf("[TerrainDebug] Created pathgrid visualization: %d points\n", debug_colored_point_count);
+        //printf("[TerrainDebug] Created pathgrid visualization: %d points\n", debug_colored_point_count);
     }
 
     // Disegna i punti

@@ -50,6 +50,8 @@ static bool load_player_assets(void) {
     g_assets.player.animRun = skeleton_find_animation(&g_assets.player.skeleton, "Standing_Run_Forward");
     g_assets.player.animAttack = skeleton_find_animation(&g_assets.player.skeleton, "CharacterArmature|Sword_Slash");
     g_assets.player.animDeath = skeleton_find_animation(&g_assets.player.skeleton, "CharacterArmature|Death");
+    g_assets.player.animTurnLeft = skeleton_find_animation(&g_assets.player.skeleton, "Standing_Turn_Left_90");
+    g_assets.player.animTurnRight = skeleton_find_animation(&g_assets.player.skeleton, "Standing_Turn_Right_90");
     
     printf("[AssetManager] Player animations: Idle=%d, Walk=%d, Run=%d\n",
            g_assets.player.animIdle, g_assets.player.animWalk, g_assets.player.animRun);

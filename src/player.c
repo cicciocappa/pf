@@ -689,6 +689,7 @@ void player_update(Player *p, float dt, Level *level)
             // Completamente bloccato - fermati
             else
             {
+                printf("STUCKED!\n");
                 p->hasDestination = false;
                 player_change_state(p, PLAYER_STATE_IDLE);
                 animator_update(&p->animator, dt);

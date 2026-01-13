@@ -237,6 +237,8 @@ int main(int argc, char* argv[]) {
         
         // Clamp dt per evitare physics explosion
         if (dt > 0.1f) dt = 0.1f;
+
+        //dt = dt/4.0;
         
         // Poll events
         glfwPollEvents();

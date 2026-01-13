@@ -89,6 +89,10 @@ void gameplay_init(Game* g) {
     glfwSetInputMode(g->window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     
     printf("[Gameplay] Ready!\n");
+
+    pathfinding_run_benchmark(&level);
+
+
 }
 
 // ============================================================================

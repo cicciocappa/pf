@@ -37,6 +37,9 @@ typedef struct {
     int animRun;
     int animAttack;
     int animDeath;
+    int animTurnLeft;
+    int animTurnRight;
+
 } PlayerAssets;
 
 // Assets UI (globali)
