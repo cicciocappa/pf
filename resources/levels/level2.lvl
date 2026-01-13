@@ -1,0 +1,15 @@
+# Level 2 Configuration
+# =====================
+# 4 chunks level for testing
+
+# Header
+chunks_x 2
+chunks_z 2
+chunk_size 64.0
+
+# Chunk list: index_x index_z obj_path heightmap_path [walkmask_path]
+# With 1x1 layout, index (0,0) is the center chunk
+-1 -1 level1.obj level1_hm.png level1_wm.png
+-1 0 level1.obj level1_hm.png level1_wm.png
+0 -1 level1.obj level1_hm.png level1_wm.png
+0 0 level1.obj level1_hm.png level1_wm.png
