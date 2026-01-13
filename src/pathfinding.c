@@ -144,7 +144,7 @@ static bool pq_is_empty(PriorityQueue* pq) {
 typedef struct {
     // Griglia dati (walkability)
     uint8_t grid[MAX_GRID_CELLS];
-    
+
     // Dati per A* (riutilizzati)
     // Invece di allocare g_costs e closed_set ogni volta:
     float g_costs[MAX_GRID_CELLS];
@@ -160,10 +160,13 @@ typedef struct {
     float current_origin_x;
     float current_origin_z;
     float current_cell_size;
-    
+
     // Binary Heap preallocato
-    PriorityQueue* pq; 
-    
+    PriorityQueue* pq;
+
+    // Puntatore al livello corrente (per accesso walkmap full-res)
+    struct Level* current_level;
+
 } PathfindingContext;
 static PathfindingContext* g_ctx = NULL;
 
@@ -301,41 +304,36 @@ static bool ctx_world_to_grid(vec3 world_pos, int* out_x, int* out_z) {
 // PATH SMOOTHING (String Pulling)
 // ============================================================================
 
-// Helper: Controlla Line of Sight tra due vec3 usando la griglia statica
+// Helper: Controlla Line of Sight tra due vec3 usando la walkmap a piena risoluzione
 static bool check_world_visibility(vec3 start_pos, vec3 end_pos) {
-    int x0, z0, x1, z1;
-    
-    // Converti world -> grid
-    if (!ctx_world_to_grid(start_pos, &x0, &z0)) return false;
-    if (!ctx_world_to_grid(end_pos, &x1, &z1)) return false;
+    if (!g_ctx->current_level) return false;
 
-    // Se i punti sono nella stessa cella o adiacenti, sono visibili
-    if (x0 == x1 && z0 == z1) return true;
+    // Calcola direzione e distanza
+    float dx = end_pos[0] - start_pos[0];
+    float dz = end_pos[2] - start_pos[2];
+    float distance = sqrtf(dx * dx + dz * dz);
 
-    // Usa il tuo raycast Bresenham esistente sulla griglia statica
-    // Nota: pathgrid_line_of_sight richiede PathGrid*, ma qui usiamo g_ctx->grid.
-    // Dobbiamo adattare pathgrid_line_of_sight o crearne una versione per g_ctx.
-    // Per semplicità, duplico la logica Bresenham qui adattandola a g_ctx:
-    
-    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int dz = abs(z1 - z0), sz = z0 < z1 ? 1 : -1; 
-    int err = (dx > dz ? dx : -dz) / 2, e2;
-    
-    int cx = x0;
-    int cz = z0;
+    // Se i punti sono molto vicini, sono visibili
+    if (distance < 0.1f) return true;
 
-    while (true) {
-        // Check collisione sulla griglia statica
-        // Ricorda: idx = z * WIDTH + x
-        int idx = cz * TEMP_GRID_WIDTH + cx;
-        if (g_ctx->grid[idx] == 0) return false; // Muro!
+    // Step size: abbastanza piccolo da non saltare ostacoli nella walkmap
+    // La walkmap tipicamente ha risoluzione ~6cm per pixel (64m / 1024px)
+    // Usiamo 0.1m (10cm) come step per sicurezza
+    float step_size = 0.2f;
+    int num_steps = (int)(distance / step_size) + 1;
 
-        if (cx == x1 && cz == z1) break;
-        
-        e2 = err;
-        if (e2 > -dx) { err -= dz; cx += sx; }
-        if (e2 < dz) { err += dx; cz += sz; }
+    // Raymarching lungo la linea
+    for (int i = 0; i <= num_steps; i++) {
+        float t = (float)i / (float)num_steps;
+        float checkX = start_pos[0] + dx * t;
+        float checkZ = start_pos[2] + dz * t;
+
+        // Controlla walkability sulla walkmap a piena risoluzione
+        if (!level_is_walkable(g_ctx->current_level, checkX, checkZ)) {
+            return false; // Ostacolo trovato!
+        }
     }
+
     return true;
 }
 
@@ -801,10 +799,13 @@ Path* pathfinding_find_path(struct Level* lvl, vec3 start, vec3 goal, int zone_i
     // Ora che g_ctx è pronto, lanciamo l'algoritmo.
     // Non passiamo più griglie temporanee, perché A* leggerà da g_ctx globale.
     Path* path = astar_static_context(start, goal, lvl);
-    
-    // 5. SMOOTHING
+     
+    // 5. SMOOTHING (usa walkmap a piena risoluzione per line-of-sight)
     if (path) {
+        // Salva il puntatore al livello per check_world_visibility
+        g_ctx->current_level = lvl;
         path_smooth(path);
+        g_ctx->current_level = NULL; // Cleanup
     }
     
     return path;
