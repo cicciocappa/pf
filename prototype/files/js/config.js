@@ -3,10 +3,15 @@
 // ============================================
 
 const CONFIG = {
-    // Dimensioni griglia
+    // Dimensioni griglia (default, può essere sovrascritto dal livello)
     GRID_WIDTH: 20,
     GRID_HEIGHT: 15,
     TILE_SIZE: 40,
+
+    // Dimensioni viewport (canvas visibile)
+    // Il viewport è la "finestra" attraverso cui vediamo il mondo
+    VIEWPORT_WIDTH: 800,   // 20 tiles * 40px
+    VIEWPORT_HEIGHT: 600,  // 15 tiles * 40px
     
     // Risorse iniziali
     STARTING_MANA: 100,
@@ -89,6 +94,20 @@ const CreatureTypes = {
         radius: 16,
         armorPiercing: true,
         armorReduction: 0.5  // Riduce danno frecce del 50%
+    },
+    ELEMENTAL: {
+        name: 'Elementale',
+        hp: 80,
+        damage: 25,
+        attackSpeed: 1.5,   // Attacca velocemente
+        speed: 100,         // Veloce
+        manaCost: 10,
+        spawnCount: 2,      // Ne appaiono 2
+        intelligence: 0.8,  // Evita bene i pericoli
+        color: '#00ffff',   // Ciano/azzurro
+        radius: 10,
+        armorPiercing: false,
+        magicDamage: true   // Danno magico (per future espansioni)
     }
 };
 

@@ -267,10 +267,127 @@ class Tower {
 }
 
 // ============================================
+// MURI DIFENSIVI
+// Strutture difensive senza attacco, distruggibili
+// ============================================
+
+class Wall {
+    constructor(x, y, col, row) {
+        this.id = Utils.generateId();
+        this.name = 'Muro';
+        this.x = x;
+        this.y = y;
+        this.col = col;  // Posizione nella griglia
+        this.row = row;
+
+        this.hp = 50;    // HP del muro
+        this.maxHp = 50;
+        this.damage = 0; // I muri non attaccano
+        this.radius = CONFIG.TILE_SIZE / 2 - 2;
+
+        // Flag per indicare che è una struttura (non una torre attiva)
+        this.isWall = true;
+    }
+
+    getCell() {
+        return { col: this.col, row: this.row };
+    }
+
+    isAlive() {
+        return this.hp > 0;
+    }
+
+    takeDamage(amount) {
+        this.hp -= amount;
+        if (this.hp <= 0) {
+            this.hp = 0;
+            GameLog.death(`${this.name} è stato distrutto!`);
+        }
+        return amount;
+    }
+
+    // I muri non fanno nulla nel loro update
+    update(dt) {
+        // Nessuna logica di attacco
+    }
+
+    render(ctx) {
+        if (!this.isAlive()) return;
+
+        // Disegna il muro come un blocco
+        const size = CONFIG.TILE_SIZE - 4;
+        const x = this.x - size / 2;
+        const y = this.y - size / 2;
+
+        // Colore basato sugli HP
+        const hpPercent = this.hp / this.maxHp;
+        let color;
+        if (hpPercent > 0.6) {
+            color = '#555555'; // Grigio scuro
+        } else if (hpPercent > 0.3) {
+            color = '#666655'; // Grigio con crepe
+        } else {
+            color = '#776655'; // Quasi distrutto
+        }
+
+        // Corpo del muro
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, size, size);
+
+        // Bordo
+        ctx.strokeStyle = '#333333';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, size, size);
+
+        // Crepe se danneggiato
+        if (hpPercent < 0.7) {
+            ctx.strokeStyle = '#222222';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + size * 0.3, y);
+            ctx.lineTo(x + size * 0.5, y + size * 0.4);
+            ctx.lineTo(x + size * 0.4, y + size);
+            ctx.stroke();
+        }
+        if (hpPercent < 0.4) {
+            ctx.beginPath();
+            ctx.moveTo(x + size, y + size * 0.2);
+            ctx.lineTo(x + size * 0.6, y + size * 0.5);
+            ctx.lineTo(x + size * 0.8, y + size);
+            ctx.stroke();
+        }
+
+        // Barra HP (solo se danneggiato)
+        if (this.hp < this.maxHp) {
+            this.renderHpBar(ctx);
+        }
+    }
+
+    renderHpBar(ctx) {
+        const barWidth = CONFIG.TILE_SIZE - 8;
+        const barHeight = 3;
+        const x = this.x - barWidth / 2;
+        const y = this.y + CONFIG.TILE_SIZE / 2 - 6;
+
+        ctx.fillStyle = '#333';
+        ctx.fillRect(x, y, barWidth, barHeight);
+
+        const hpPercent = this.hp / this.maxHp;
+        ctx.fillStyle = hpPercent > 0.5 ? '#888888' : hpPercent > 0.25 ? '#aa8855' : '#aa5555';
+        ctx.fillRect(x, y, barWidth * hpPercent, barHeight);
+    }
+}
+
+// ============================================
 // FACTORY per creare torri
 // ============================================
 
 function createTower(type, col, row) {
     const pos = Utils.gridToPixel(col, row);
     return new Tower(pos.x, pos.y, type);
+}
+
+function createWall(col, row) {
+    const pos = Utils.gridToPixel(col, row);
+    return new Wall(pos.x, pos.y, col, row);
 }

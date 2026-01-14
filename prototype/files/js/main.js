@@ -22,8 +22,8 @@ window.addEventListener('DOMContentLoaded', () => {
     // Setup input
     inputHandler = new InputHandler(game);
     
-    // Carica il primo livello
-    game.loadLevel(Levels.tutorial);
+    // Carica il primo livello (bigMap per testare la camera)
+    game.loadLevel(Levels.bigMap);
     
     // Avvia game loop
     game.start();

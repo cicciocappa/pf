@@ -9,7 +9,12 @@
 class InputHandler {
     constructor(game) {
         this.game = game;
-        
+
+        // ========================================
+        // STATO TASTI MODIFICATORI
+        // ========================================
+        this.shiftPressed = false;
+
         // ========================================
         // STATO MODALITÀ EVOCAZIONE
         // ========================================
@@ -55,6 +60,14 @@ class InputHandler {
             y: (e.clientY - rect.top) * scaleY
         };
     }
+
+    // ========================================
+    // FUNZIONE HELPER: COORDINATE MONDO
+    // Converte le coordinate schermo in coordinate mondo usando la camera
+    // ========================================
+    getWorldCoords(screenX, screenY) {
+        return this.game.camera.screenToWorld(screenX, screenY);
+    }
     
     setupEventListeners() {
         const canvas = this.game.canvas;
@@ -67,13 +80,18 @@ class InputHandler {
         // - Preview direzione durante drag
         // ========================================
         canvas.addEventListener('mousemove', (e) => {
-            const coords = this.getCanvasCoords(e);
-            this.game.mouseX = coords.x;
-            this.game.mouseY = coords.y;
-            
-            // Aggiorna la freccia direzionale se siamo in fase aiming
+            const screenCoords = this.getCanvasCoords(e);
+            const worldCoords = this.getWorldCoords(screenCoords.x, screenCoords.y);
+
+            // Salva sia le coordinate schermo che mondo
+            this.game.mouseX = screenCoords.x;
+            this.game.mouseY = screenCoords.y;
+            this.game.worldMouseX = worldCoords.x;
+            this.game.worldMouseY = worldCoords.y;
+
+            // Aggiorna la freccia direzionale se siamo in fase aiming (usa coordinate mondo)
             if (this.summonPhase === 'aiming') {
-                this.game.summonAimEnd = { x: coords.x, y: coords.y };
+                this.game.summonAimEnd = { x: worldCoords.x, y: worldCoords.y };
             }
         });
         
@@ -86,9 +104,10 @@ class InputHandler {
         // ========================================
         canvas.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return; // Solo click sinistro
-            
-            const coords = this.getCanvasCoords(e);
-            this.handleLeftMouseDown(coords.x, coords.y);
+
+            const screenCoords = this.getCanvasCoords(e);
+            const worldCoords = this.getWorldCoords(screenCoords.x, screenCoords.y);
+            this.handleLeftMouseDown(worldCoords.x, worldCoords.y);
         });
         
         // ========================================
@@ -98,9 +117,10 @@ class InputHandler {
         // ========================================
         canvas.addEventListener('mouseup', (e) => {
             if (e.button !== 0) return;
-            
-            const coords = this.getCanvasCoords(e);
-            this.handleLeftMouseUp(coords.x, coords.y);
+
+            const screenCoords = this.getCanvasCoords(e);
+            const worldCoords = this.getWorldCoords(screenCoords.x, screenCoords.y);
+            this.handleLeftMouseUp(worldCoords.x, worldCoords.y);
         });
         
         // ========================================
@@ -112,21 +132,24 @@ class InputHandler {
         // ========================================
         canvas.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            const coords = this.getCanvasCoords(e);
-            this.handleRightMouseDown(coords.x, coords.y);
+            const screenCoords = this.getCanvasCoords(e);
+            const worldCoords = this.getWorldCoords(screenCoords.x, screenCoords.y);
+            this.handleRightMouseDown(worldCoords.x, worldCoords.y);
         });
-        
+
         // Per gestire il mouse up del destro (fine drag evocazione)
         canvas.addEventListener('mouseup', (e) => {
             if (e.button !== 2) return; // Solo click destro
-            
-            const coords = this.getCanvasCoords(e);
-            this.handleRightMouseUp(coords.x, coords.y);
+
+            const screenCoords = this.getCanvasCoords(e);
+            const worldCoords = this.getWorldCoords(screenCoords.x, screenCoords.y);
+            this.handleRightMouseUp(worldCoords.x, worldCoords.y);
         });
         
         // Tastiera
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
-        
+        document.addEventListener('keyup', (e) => this.handleKeyUp(e));
+
         // Bottoni UI
         this.setupUIButtons();
     }
@@ -136,7 +159,7 @@ class InputHandler {
     // ========================================
     handleLeftMouseDown(x, y) {
         if (this.game.state !== 'playing') return;
-        
+
         // ------------------------------
         // CASO 1: Prova a selezionare una creatura
         // Se il click è su una creatura, la selezioniamo
@@ -151,17 +174,20 @@ class InputHandler {
             GameLog.log(`Selezionata creatura: ${clickedCreature.name}`);
             return;
         }
-        
+
         // ------------------------------
         // CASO 2: Se abbiamo una creatura selezionata e clicchiamo altrove,
-        // inizia ordine direzionale
+        // ordine di movimento verso il punto
+        // - SHIFT premuto: ignora le torri
+        // - SHIFT non premuto: attacca le torri che incontra
         // ------------------------------
         if (this.selectedCreature && this.selectedCreature.isAlive()) {
+            // Prepara per eventuale drag direzionale
             this.orderingCreature = true;
             this.orderDragStart = { x, y };
             return;
         }
-        
+
         // ------------------------------
         // CASO 3: Movimento del mago
         // Se nessuna modalità speciale è attiva, muovi il mago
@@ -176,15 +202,15 @@ class InputHandler {
     // ========================================
     handleLeftMouseUp(x, y) {
         if (this.game.state !== 'playing') return;
-        
+
         // ------------------------------
-        // Gestione fine ordine direzionale a creatura
+        // Gestione ordini a creatura selezionata
         // ------------------------------
         if (this.orderingCreature && this.selectedCreature && this.selectedCreature.isAlive()) {
             const dragDist = Utils.distance(
                 this.orderDragStart.x, this.orderDragStart.y, x, y
             );
-            
+
             // Se è stato un drag significativo (non un semplice click)
             if (dragDist > 20) {
                 // Calcola la direzione del drag
@@ -192,23 +218,40 @@ class InputHandler {
                     x - this.orderDragStart.x,
                     y - this.orderDragStart.y
                 );
-                
+
                 // Ordina alla creatura di muoversi in quella direzione
                 // cercando torri lungo il percorso
                 this.game.orderCreatureDirection(this.selectedCreature, direction);
                 GameLog.log(`Ordine direzionale a ${this.selectedCreature.name}`);
             }
-            // Se è un semplice click (non drag), deseleziona
+            // Se è un semplice click (non drag)
             else {
-                // Click senza drag su punto vuoto = deseleziona
+                // Verifica se abbiamo cliccato su un'altra creatura
                 const clickedCreature = this.game.getCreatureAt(x, y);
-                if (!clickedCreature) {
-                    this.selectedCreature = null;
-                    this.game.selectedCreature = null;
+                if (clickedCreature) {
+                    // Selezioniamo la nuova creatura (già gestito in mousedown)
+                }
+                // Verifica se abbiamo cliccato su una torre
+                else if (this.game.getTowerAt(x, y)) {
+                    // Se clicchiamo su una torre, attaccala
+                    const tower = this.game.getTowerAt(x, y);
+                    this.selectedCreature.setDirectTarget(tower, this.game.map, this.game.pathfinder);
+                }
+                // Click su punto vuoto = ordine di movimento
+                else {
+                    // SHIFT premuto: ignora le torri
+                    // SHIFT non premuto: attacca le torri che incontra
+                    const ignoreTowers = this.shiftPressed;
+                    this.selectedCreature.setMoveTarget(
+                        x, y,
+                        this.game.map,
+                        this.game.pathfinder,
+                        ignoreTowers
+                    );
                 }
             }
         }
-        
+
         this.orderingCreature = false;
         this.orderDragStart = null;
     }
@@ -409,6 +452,11 @@ class InputHandler {
     // GESTIONE TASTIERA
     // ========================================
     handleKeyDown(e) {
+        // Traccia lo stato di Shift
+        if (e.key === 'Shift') {
+            this.shiftPressed = true;
+        }
+
         switch (e.key.toLowerCase()) {
             // Incantesimi
             case '1':
@@ -428,6 +476,10 @@ class InputHandler {
             case 'w':
                 this.game.selectedSpell = null;
                 this.activateSummonMode('GIANT');
+                break;
+            case 'e':
+                this.game.selectedSpell = null;
+                this.activateSummonMode('ELEMENTAL');
                 break;
                 
             // Utility
@@ -453,7 +505,14 @@ class InputHandler {
                 break;
         }
     }
-    
+
+    handleKeyUp(e) {
+        // Traccia lo stato di Shift
+        if (e.key === 'Shift') {
+            this.shiftPressed = false;
+        }
+    }
+
     setupUIButtons() {
         // Bottoni incantesimi
         document.querySelectorAll('.spell-btn').forEach(btn => {

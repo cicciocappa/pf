@@ -95,8 +95,8 @@ class Pathfinder {
         for (const dir of directions) {
             const newCol = col + dir.dc;
             const newRow = row + dir.dr;
-            
-            if (Utils.isValidCell(newCol, newRow)) {
+
+            if (this.map.isValidCell(newCol, newRow)) {
                 // Per movimenti diagonali, verifica che le celle adiacenti siano percorribili
                 if (dir.dc !== 0 && dir.dr !== 0) {
                     if (!this.map.isWalkable(col + dir.dc, row) || 

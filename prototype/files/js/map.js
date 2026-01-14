@@ -26,7 +26,20 @@ class GameMap {
     }
     
     // Carica una mappa predefinita
+    // La mappa può essere di qualsiasi dimensione
     loadLevel(levelData) {
+        // Determina le dimensioni dalla mappa
+        const newHeight = levelData.length;
+        const newWidth = levelData[0] ? levelData[0].length : 0;
+
+        // Ridimensiona la griglia se necessario
+        if (newWidth !== this.width || newHeight !== this.height) {
+            this.width = newWidth;
+            this.height = newHeight;
+            this.initializeGrid();
+        }
+
+        // Copia i dati della mappa
         for (let row = 0; row < this.height; row++) {
             for (let col = 0; col < this.width; col++) {
                 if (levelData[row] && levelData[row][col] !== undefined) {
@@ -35,14 +48,19 @@ class GameMap {
             }
         }
     }
-    
-    getTile(col, row) {
-        if (!Utils.isValidCell(col, row)) return Tile.WALL;
-        return this.tiles[row][col];
+
+    // Verifica se una cella è valida per questa mappa
+    isValidCell(col, row) {
+        return col >= 0 && col < this.width && row >= 0 && row < this.height;
     }
     
+    getTile(col, row) {
+        if (!this.isValidCell(col, row)) return Tile.WALL;
+        return this.tiles[row][col];
+    }
+
     setTile(col, row, tileType) {
-        if (Utils.isValidCell(col, row)) {
+        if (this.isValidCell(col, row)) {
             this.tiles[row][col] = tileType;
         }
     }
@@ -67,7 +85,7 @@ class GameMap {
     }
     
     getDangerLevel(col, row) {
-        if (!Utils.isValidCell(col, row)) return Infinity;
+        if (!this.isValidCell(col, row)) return Infinity;
         return this.dangerMap[row][col];
     }
     
@@ -210,5 +228,59 @@ const Levels = {
         ],
         mageStart: { col: 0, row: 7 },
         treasurePos: { col: 18, row: 7 }
+    },
+
+    // ========================================
+    // LIVELLO GRANDE - Test Camera
+    // Mappa 40x25 (1600x1000 pixel)
+    // Il viewport è 20x15 (800x600 pixel)
+    // ========================================
+    bigMap: {
+        name: "La Grande Fortezza",
+        map: [
+            // Riga 0-4: Area nord
+            [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,6,6,6,0,0,0,0,0,0,0,0,6,6,6,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,6,6,6,0,0,0,0,0,0,0,0,6,6,6,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            // Riga 5-9: Prima zona torri
+            [2,0,0,0,0,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,0,0,0,0,0,0,2],
+            [2,0,0,0,0,2,5,5,5,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,5,5,5,2,0,0,0,0,0,0,2],
+            [2,0,0,0,0,2,5,5,5,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,5,5,5,2,0,0,0,0,0,0,2],
+            [2,0,0,0,0,2,2,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,0,2,2,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            // Riga 10-14: Zona centrale con acqua
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,2,2,2,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,2,5,5,5,5,5,5,5,5,5,5,5,5,2,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,2,5,5,5,5,5,5,5,5,5,5,5,5,2,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            // Riga 15-19: Zona centrale fortezza
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,5,7,5,5,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            // Riga 20-24: Area sud
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,2],
+            [2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2],
+            [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]
+        ],
+        towers: [
+            // Torri nell'area nord
+            { type: 'GUARD_TOWER', col: 7, row: 7 },
+            { type: 'GUARD_TOWER', col: 31, row: 7 },
+            // Torri centrali
+            { type: 'BALLISTA', col: 20, row: 13 },
+            { type: 'BALLISTA', col: 20, row: 15 },
+            // Torri che proteggono il tesoro
+            { type: 'GUARD_TOWER', col: 17, row: 19 },
+            { type: 'GUARD_TOWER', col: 23, row: 19 }
+        ],
+        mageStart: { col: 2, row: 2 },
+        treasurePos: { col: 19, row: 19 }
     }
 };

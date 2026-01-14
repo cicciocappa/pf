@@ -350,6 +350,26 @@ class Creature extends Entity {
         // FLAG SELEZIONE
         // ========================================
         this.isSelected = false;
+
+        // ========================================
+        // FLAG IGNORA TORRI
+        // Se true, la creatura ignora le torri durante il movimento
+        // (non le attacca anche se attaccata o le vede)
+        // ========================================
+        this.ignoreTowers = false;
+
+        // ========================================
+        // PUNTO DI DESTINAZIONE PER MOVIMENTO
+        // Usato quando si muove verso un punto specifico
+        // ========================================
+        this.moveTargetPoint = null;
+
+        // ========================================
+        // FLAG MOVIMENTO DIRETTO
+        // Se true, la creatura si muove in linea retta verso il target
+        // ignorando gli ostacoli (può bloccarsi contro i muri)
+        // ========================================
+        this.useDirectMovement = false;
     }
     
     // ========================================
@@ -395,7 +415,7 @@ class Creature extends Entity {
     // UPDATE PRINCIPALE
     // Gestisce il comportamento in base allo stato
     // ========================================
-    update(dt, gameMap, towers) {
+    update(dt, gameMap, towers, pathfinder) {
         // Aggiorna cooldown attacco
         if (this.attackCooldown > 0) {
             this.attackCooldown -= dt;
@@ -411,23 +431,45 @@ class Creature extends Entity {
             case EntityState.IDLE:
                 // ------------------------------
                 // COMPORTAMENTO IDLE:
-                // Se viene attaccata, reagisce cercando un bersaglio
-                // tra le torri che la stanno attaccando.
-                // Se non viene attaccata, resta ferma in attesa di ordini
-                // (anche se ha torri nel raggio di vista)
+                // Se ignoreTowers è false e viene attaccata, reagisce
+                // cercando un bersaglio tra le torri che la stanno attaccando.
+                // Se ignoreTowers è true o non viene attaccata, resta ferma.
                 // ------------------------------
-                if (this.attackedBy.length > 0) {
+                if (!this.ignoreTowers && this.attackedBy.length > 0) {
                     // Siamo sotto attacco! Reagisci!
-                    this.reactToAttack(towers, gameMap);
+                    this.reactToAttack(towers, gameMap, pathfinder);
                 }
                 // Altrimenti resta in IDLE
                 break;
-                
+
             case EntityState.MOVING:
                 // Segue il percorso calcolato
                 this.followPath(dt, gameMap);
-                // Verifica se siamo arrivati al target
-                this.checkTargetReached();
+
+                // Se ignoreTowers è false, cerca torri e reagisce agli attacchi
+                if (!this.ignoreTowers) {
+                    // Cerca torri nel raggio di vista
+                    const visibleTower = this.findTowerInSight(towers);
+                    if (visibleTower) {
+                        // Trovata una torre! Passa in modalità attacco
+                        this.target = visibleTower;
+                        this.state = EntityState.ATTACKING;
+                        this.moveTargetPoint = null;
+                        this.path = null;
+                        GameLog.log(`${this.name} ha avvistato ${visibleTower.name}!`);
+                        break;
+                    }
+
+                    // Reagisce se viene attaccata
+                    if (this.attackedBy.length > 0) {
+                        this.reactToAttack(towers, gameMap, pathfinder);
+                        this.moveTargetPoint = null;
+                        break;
+                    }
+                }
+
+                // Verifica se siamo arrivati alla destinazione
+                this.checkMoveTargetReached();
                 break;
                 
             case EntityState.ATTACKING:
@@ -471,9 +513,10 @@ class Creature extends Entity {
     setDirectionTarget(direction, gameMap, pathfinder) {
         this.target = null;
         this.moveDirection = direction;
-        
+        this.ignoreTowers = false; // Reset del flag
+
         // Calcola il punto di destinazione: il limite della mappa in quella direzione
-        this.destinationPoint = this.calculateEdgePoint(direction);
+        this.destinationPoint = this.calculateEdgePoint(direction, gameMap);
         
         // Calcola il percorso verso quel punto
         const success = this.moveTo(
@@ -492,12 +535,41 @@ class Creature extends Entity {
     }
     
     // ========================================
+    // IMPOSTA MOVIMENTO VERSO UN PUNTO
+    // La creatura si muove verso un punto specifico
+    // Se ignoreTowers è true, ignora completamente le torri
+    // Se ignoreTowers è false, attacca le torri che incontra o che la attaccano
+    // ========================================
+    setMoveTarget(targetX, targetY, gameMap, pathfinder, ignoreTowers = false) {
+        this.target = null;
+        this.moveDirection = null;
+        this.ignoreTowers = ignoreTowers;
+        this.moveTargetPoint = { x: targetX, y: targetY };
+
+        // Calcola il percorso verso il punto
+        const success = this.moveTo(targetX, targetY, gameMap, pathfinder);
+
+        if (success) {
+            this.state = EntityState.MOVING;
+            if (ignoreTowers) {
+                GameLog.log(`${this.name} si muove (ignora torri)`);
+            } else {
+                GameLog.log(`${this.name} si muove verso destinazione`);
+            }
+        } else {
+            GameLog.log(`${this.name}: percorso non trovato`);
+            this.state = EntityState.IDLE;
+            this.moveTargetPoint = null;
+        }
+    }
+
+    // ========================================
     // CALCOLA IL PUNTO SUL BORDO DELLA MAPPA
     // Data una direzione, trova dove interseca il bordo
     // ========================================
-    calculateEdgePoint(direction) {
-        const mapWidth = CONFIG.GRID_WIDTH * CONFIG.TILE_SIZE;
-        const mapHeight = CONFIG.GRID_HEIGHT * CONFIG.TILE_SIZE;
+    calculateEdgePoint(direction, gameMap) {
+        const mapWidth = gameMap.width * CONFIG.TILE_SIZE;
+        const mapHeight = gameMap.height * CONFIG.TILE_SIZE;
         
         // Calcola le intersezioni con i 4 bordi
         let minT = Infinity;
@@ -615,8 +687,8 @@ class Creature extends Entity {
     }
     
     // ========================================
-    // VERIFICA SE ABBIAMO RAGGIUNTO IL TARGET
-    // Chiamato durante MOVING
+    // VERIFICA SE ABBIAMO RAGGIUNTO IL TARGET (torre)
+    // Chiamato durante MOVING verso una torre
     // ========================================
     checkTargetReached() {
         if (!this.target || !this.target.isAlive()) {
@@ -630,15 +702,45 @@ class Creature extends Entity {
             }
             return;
         }
-        
+
         // Verifica distanza dal target
         const dist = Utils.entityDistance(this, this.target);
         const attackRange = this.radius + (this.target.radius || 20) + 10;
-        
+
         if (dist <= attackRange) {
             // Siamo in range di attacco!
             this.state = EntityState.ATTACKING;
             this.path = null;
+        }
+    }
+
+    // ========================================
+    // VERIFICA SE ABBIAMO RAGGIUNTO LA DESTINAZIONE
+    // Chiamato durante MOVING verso un punto
+    // ========================================
+    checkMoveTargetReached() {
+        // Se abbiamo un target (torre), usa la logica originale
+        if (this.target && this.target.isAlive && this.target.isAlive()) {
+            this.checkTargetReached();
+            return;
+        }
+
+        // Se stiamo andando verso un punto specifico
+        if (this.moveTargetPoint) {
+            // Verifica se il path è completato
+            if (!this.path || this.pathIndex >= this.path.length) {
+                // Arrivato alla destinazione
+                this.state = EntityState.IDLE;
+                this.moveTargetPoint = null;
+                this.ignoreTowers = false; // Reset del flag
+                GameLog.log(`${this.name} è arrivato a destinazione`);
+            }
+            return;
+        }
+
+        // Fallback: se non c'è né target né punto di destinazione
+        if (!this.path || this.pathIndex >= this.path.length) {
+            this.state = EntityState.IDLE;
         }
     }
     
@@ -679,16 +781,48 @@ class Creature extends Entity {
             const dx = this.target.x - this.x;
             const dy = this.target.y - this.y;
             const norm = Math.sqrt(dx * dx + dy * dy);
-            
+
             if (norm > 0) {
-                const speedMult = gameMap.getSpeedMultiplier(
-                    Math.floor(this.x / CONFIG.TILE_SIZE),
-                    Math.floor(this.y / CONFIG.TILE_SIZE)
-                );
+                const currentCell = this.getCell();
+                const speedMult = gameMap.getSpeedMultiplier(currentCell.col, currentCell.row);
                 const actualSpeed = this.speed * speedMult;
-                
-                this.x += (dx / norm) * actualSpeed * dt;
-                this.y += (dy / norm) * actualSpeed * dt;
+
+                // Calcola la nuova posizione
+                const moveX = (dx / norm) * actualSpeed * dt;
+                const moveY = (dy / norm) * actualSpeed * dt;
+                const newX = this.x + moveX;
+                const newY = this.y + moveY;
+
+                // Verifica se la nuova posizione è camminabile
+                const newCell = Utils.pixelToGrid(newX, newY);
+
+                if (gameMap.isWalkable(newCell.col, newCell.row)) {
+                    // Cella camminabile, muoviti
+                    this.x = newX;
+                    this.y = newY;
+                } else if (this.useDirectMovement) {
+                    // ----------------------------------------
+                    // MOVIMENTO DIRETTO: Bloccato da un muro!
+                    // Prova a muoversi solo su un asse
+                    // ----------------------------------------
+                    const cellX = Utils.pixelToGrid(newX, this.y);
+                    const cellY = Utils.pixelToGrid(this.x, newY);
+
+                    // Prova movimento solo orizzontale
+                    if (gameMap.isWalkable(cellX.col, cellX.row)) {
+                        this.x = newX;
+                    }
+                    // Prova movimento solo verticale
+                    else if (gameMap.isWalkable(cellY.col, cellY.row)) {
+                        this.y = newY;
+                    }
+                    // Completamente bloccato - resta fermo
+                    // (la creatura continuerà a provare nel prossimo frame)
+                } else {
+                    // Movimento con pathfinding fallito, non dovrebbe succedere
+                    this.x = newX;
+                    this.y = newY;
+                }
             }
         }
     }
@@ -753,32 +887,67 @@ class Creature extends Entity {
     }
     
     // ========================================
-    // REAGISCE A UN ATTACCO (quando in IDLE)
+    // REAGISCE A UN ATTACCO
     // Cerca tra le torri che ci stanno attaccando e sceglie
     // quella con HP * DAMAGE più basso come bersaglio.
-    // Questa funzione viene chiamata solo quando la creatura
-    // è in IDLE e viene colpita da una torre.
+    //
+    // COMPORTAMENTO BASATO SU INTELLIGENZA:
+    // - Intelligenza < 0.5: movimento diretto (può bloccarsi contro i muri)
+    // - Intelligenza >= 0.5: usa pathfinding per evitare ostacoli
     // ========================================
-    reactToAttack(towers, gameMap) {
+    reactToAttack(towers, gameMap, pathfinder) {
         // Filtra solo le torri ancora vive
         const attackers = this.attackedBy.filter(t => t.isAlive());
-        
+
         if (attackers.length === 0) {
-            // Nessun attaccante valido, resta in IDLE
+            // Nessun attaccante valido, resta nello stato corrente
             return;
         }
-        
+
         // Ordina per HP * DAMAGE (priorità al più basso = più facile da eliminare)
         attackers.sort((a, b) => {
             const scoreA = a.hp * a.damage;
             const scoreB = b.hp * b.damage;
             return scoreA - scoreB;
         });
-        
-        // Scegli il bersaglio e inizia ad attaccare
+
+        // Scegli il bersaglio
         this.target = attackers[0];
-        this.state = EntityState.ATTACKING;
-        GameLog.log(`${this.name} reagisce e contrattacca ${this.target.name}!`);
+        this.moveTargetPoint = null;
+        this.path = null;
+
+        // Comportamento basato su intelligenza
+        if (this.intelligence < 0.5) {
+            // ------------------------------
+            // BASSA INTELLIGENZA: Movimento diretto
+            // La creatura va dritta verso la torre (può bloccarsi contro i muri)
+            // ------------------------------
+            this.state = EntityState.ATTACKING;
+            this.useDirectMovement = true; // Flag per movimento diretto
+            GameLog.log(`${this.name} carica direttamente ${this.target.name}!`);
+        } else {
+            // ------------------------------
+            // ALTA INTELLIGENZA: Usa pathfinding
+            // La creatura calcola un percorso evitando gli ostacoli
+            // ------------------------------
+            if (pathfinder) {
+                const success = this.moveTo(this.target.x, this.target.y, gameMap, pathfinder);
+                if (success) {
+                    this.state = EntityState.MOVING;
+                    this.useDirectMovement = false;
+                    GameLog.log(`${this.name} aggira gli ostacoli verso ${this.target.name}`);
+                } else {
+                    // Se non trova un percorso, prova movimento diretto come fallback
+                    this.state = EntityState.ATTACKING;
+                    this.useDirectMovement = true;
+                    GameLog.log(`${this.name} non trova percorso, carica ${this.target.name}!`);
+                }
+            } else {
+                // Fallback se pathfinder non disponibile
+                this.state = EntityState.ATTACKING;
+                this.useDirectMovement = true;
+            }
+        }
     }
     
     // ========================================
@@ -825,7 +994,7 @@ class Creature extends Entity {
         ctx.stroke();
         
         // ----------------------------------------
-        // Indicatore tipo (per distinguere larve da giganti)
+        // Indicatore tipo (per distinguere le creature)
         // ----------------------------------------
         if (this.type === 'GIANT') {
             ctx.fillStyle = '#fff';
@@ -833,6 +1002,19 @@ class Creature extends Entity {
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('G', this.x, this.y);
+        } else if (this.type === 'ELEMENTAL') {
+            // Effetto magico: cerchi concentrici pulsanti
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius * 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+            // Simbolo "E"
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 10px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('E', this.x, this.y);
         }
         
         // ----------------------------------------
@@ -844,6 +1026,16 @@ class Creature extends Entity {
             ctx.beginPath();
             ctx.arc(this.x, this.y - this.radius - 5, 3, 0, Math.PI * 2);
             ctx.fill();
+        }
+
+        // Indicatore "ignora torri" - linea blu sotto la creatura
+        if (this.ignoreTowers && this.state === EntityState.MOVING) {
+            ctx.strokeStyle = '#00aaff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(this.x - this.radius, this.y + this.radius + 4);
+            ctx.lineTo(this.x + this.radius, this.y + this.radius + 4);
+            ctx.stroke();
         }
         
         // ----------------------------------------

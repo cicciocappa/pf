@@ -6,10 +6,15 @@ class Game {
     constructor(canvas) {
         this.canvas = canvas;
         this.ctx = canvas.getContext('2d');
-        
-        // Dimensioni
+
+        // Dimensioni viewport (fisse, indipendenti dalla mappa)
+        this.viewportWidth = CONFIG.VIEWPORT_WIDTH || CONFIG.GRID_WIDTH * CONFIG.TILE_SIZE;
+        this.viewportHeight = CONFIG.VIEWPORT_HEIGHT || CONFIG.GRID_HEIGHT * CONFIG.TILE_SIZE;
         this.resize();
-        
+
+        // Camera
+        this.camera = new Camera(this.viewportWidth, this.viewportHeight);
+
         // Sistemi
         this.map = new GameMap(CONFIG.GRID_WIDTH, CONFIG.GRID_HEIGHT);
         this.pathfinder = new Pathfinder(this.map);
@@ -19,13 +24,18 @@ class Game {
         this.mage = null;
         this.creatures = [];
         this.towers = [];
+        this.walls = [];  // Muri distruggibili
         
         // Stato gioco
         this.state = 'playing';  // playing, won, lost
         this.selectedSpell = null;
         this.showTowerRanges = false;
-        this.mouseX = 0;
+
+        // Coordinate mouse (schermo e mondo)
+        this.mouseX = 0;      // Coordinate schermo (canvas)
         this.mouseY = 0;
+        this.worldMouseX = 0; // Coordinate mondo (con offset camera)
+        this.worldMouseY = 0;
         
         // ========================================
         // STATO SELEZIONE CREATURE
@@ -47,8 +57,9 @@ class Game {
     }
     
     resize() {
-        this.canvas.width = CONFIG.GRID_WIDTH * CONFIG.TILE_SIZE;
-        this.canvas.height = CONFIG.GRID_HEIGHT * CONFIG.TILE_SIZE;
+        // Il canvas è sempre la dimensione del viewport
+        this.canvas.width = this.viewportWidth;
+        this.canvas.height = this.viewportHeight;
     }
     
     // Carica un livello
@@ -56,33 +67,55 @@ class Game {
         // Reset
         this.creatures = [];
         this.towers = [];
+        this.walls = [];
         this.state = 'playing';
         this.selectedSpell = null;
         this.selectedCreature = null;
         this.summonAimStart = null;
         this.summonAimEnd = null;
         GameLog.clear();
-        
-        // Carica mappa
+
+        // Carica mappa (potrebbe ridimensionare la griglia)
         this.map.loadLevel(levelData.map);
-        
+
+        // Crea entità Wall per ogni tile WALL
+        for (let row = 0; row < this.map.height; row++) {
+            for (let col = 0; col < this.map.width; col++) {
+                if (this.map.getTile(col, row) === Tile.WALL) {
+                    const wall = createWall(col, row);
+                    this.walls.push(wall);
+                }
+            }
+        }
+
+        // Aggiorna pathfinder con la nuova mappa
+        this.pathfinder = new Pathfinder(this.map);
+
+        // Imposta i bounds del mondo per la camera
+        const worldWidth = this.map.width * CONFIG.TILE_SIZE;
+        const worldHeight = this.map.height * CONFIG.TILE_SIZE;
+        this.camera.setWorldBounds(worldWidth, worldHeight);
+
         // Crea torri
         for (const towerDef of levelData.towers) {
             const tower = createTower(towerDef.type, towerDef.col, towerDef.row);
             this.towers.push(tower);
         }
-        
+
         // Aggiorna danger map
         this.map.updateDangerMap(this.towers);
-        
+
         // Crea mago
         const magePos = Utils.gridToPixel(levelData.mageStart.col, levelData.mageStart.row);
         this.mage = new Mage(magePos.x, magePos.y);
-        
+
+        // Imposta la camera per seguire il mago
+        this.camera.setTarget(this.mage);
+
         // Log
         GameLog.log(`Livello "${levelData.name}" caricato`);
         GameLog.log(`Obiettivo: raggiungi il tesoro!`);
-        
+
         this.updateUI();
     }
     
@@ -133,7 +166,7 @@ class Game {
             
             if (creature.isAlive()) {
                 // Passa le torri alla creatura per la logica di ricerca bersagli
-                creature.update(dt, this.map, this.towers);
+                creature.update(dt, this.map, this.towers, this.pathfinder);
                 
                 // Aggiorna stato selezione
                 creature.isSelected = (creature === this.selectedCreature);
@@ -153,7 +186,7 @@ class Game {
         // Update torri
         for (let i = this.towers.length - 1; i >= 0; i--) {
             const tower = this.towers[i];
-            
+
             if (tower.isAlive()) {
                 tower.update(dt, allEnemies.filter(e => e.isAlive()));
             } else {
@@ -163,26 +196,48 @@ class Game {
                 this.map.updateDangerMap(this.towers);
             }
         }
-        
+
+        // Update muri (gestisce distruzione)
+        for (let i = this.walls.length - 1; i >= 0; i--) {
+            const wall = this.walls[i];
+
+            if (!wall.isAlive()) {
+                // Muro distrutto - cambia il tile a DIRT
+                this.map.setTile(wall.col, wall.row, Tile.DIRT);
+                this.walls.splice(i, 1);
+                // Aggiorna pathfinder perché la mappa è cambiata
+                this.pathfinder = new Pathfinder(this.map);
+            }
+        }
+
         // Update sistema incantesimi
         this.spellSystem.update(dt);
-        
+
+        // Update camera
+        this.camera.update(dt);
+
         // Update UI
         this.updateUI();
     }
     
     // Render
     render() {
-        // Clear
+        // Clear (usa dimensioni viewport, non mondo)
         this.ctx.fillStyle = '#1a1a2e';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        
+
+        // ========================================
+        // INIZIO RENDERING CON CAMERA
+        // Tutto ciò che appartiene al mondo viene disegnato con la trasformazione attiva
+        // ========================================
+        this.camera.apply(this.ctx);
+
         // Mappa
         this.map.render(this.ctx);
-        
-        // Evidenzia cella sotto il cursore
+
+        // Evidenzia cella sotto il cursore (usa coordinate mondo)
         this.renderHoveredCell();
-        
+
         // ========================================
         // RENDER RAGGIO DI EVOCAZIONE
         // Mostra il cerchio entro cui si può evocare
@@ -190,7 +245,7 @@ class Game {
         if (inputHandler && inputHandler.pendingSummonType && this.mage) {
             this.renderSummonRange();
         }
-        
+
         // ========================================
         // RENDER FRECCIA DIREZIONALE EVOCAZIONE
         // Mostra la direzione durante il drag
@@ -198,12 +253,19 @@ class Game {
         if (this.summonAimStart && this.summonAimEnd) {
             this.renderSummonDirection();
         }
-        
+
+        // Muri (rendere prima delle torri)
+        for (const wall of this.walls) {
+            if (wall.isAlive()) {
+                wall.render(this.ctx);
+            }
+        }
+
         // Range torri (se abilitato)
         for (const tower of this.towers) {
             tower.render(this.ctx, this.showTowerRanges);
         }
-        
+
         // Creature
         for (const creature of this.creatures) {
             if (creature.isAlive()) {
@@ -212,30 +274,44 @@ class Game {
                 // creature.renderPath(this.ctx);
             }
         }
-        
+
         // Mago
         if (this.mage && this.mage.isAlive()) {
             this.mage.render(this.ctx);
             this.mage.renderPath(this.ctx);
         }
-        
+
         // Effetti incantesimi
         this.spellSystem.render(this.ctx);
-        
-        // Preview incantesimo selezionato
+
+        // Preview incantesimo selezionato (usa coordinate mondo)
         if (this.selectedSpell && this.mage) {
             const isValid = this.spellSystem.isInCastRange(
-                this.mage, this.mouseX, this.mouseY, this.selectedSpell
+                this.mage, this.worldMouseX, this.worldMouseY, this.selectedSpell
             );
             this.spellSystem.renderCastRange(this.ctx, this.mage, this.selectedSpell);
-            renderSpellPreview(this.ctx, this.selectedSpell, this.mouseX, this.mouseY, isValid);
+            renderSpellPreview(this.ctx, this.selectedSpell, this.worldMouseX, this.worldMouseY, isValid);
         }
-        
+
+        // ========================================
+        // FINE RENDERING CON CAMERA
+        // ========================================
+        this.camera.restore(this.ctx);
+
+        // ========================================
+        // UI FISSE (non influenzate dalla camera)
+        // ========================================
+
         // Messaggio stato gioco
         if (this.state === 'won') {
             this.renderMessage('VITTORIA!', '#2ecc71');
         } else if (this.state === 'lost') {
             this.renderMessage('SCONFITTA', '#e74c3c');
+        }
+
+        // Mini-mappa (opzionale, per mappe grandi)
+        if (this.map.width > CONFIG.GRID_WIDTH || this.map.height > CONFIG.GRID_HEIGHT) {
+            this.renderMinimap();
         }
     }
     
@@ -255,10 +331,10 @@ class Game {
     }
     
     renderHoveredCell() {
-        // Calcola la cella sotto il mouse
-        const cell = Utils.pixelToGrid(this.mouseX, this.mouseY);
-        
-        if (!Utils.isValidCell(cell.col, cell.row)) return;
+        // Calcola la cella sotto il mouse (usa coordinate mondo)
+        const cell = Utils.pixelToGrid(this.worldMouseX, this.worldMouseY);
+
+        if (!this.map.isValidCell(cell.col, cell.row)) return;
         
         const x = cell.col * CONFIG.TILE_SIZE;
         const y = cell.row * CONFIG.TILE_SIZE;
@@ -303,12 +379,12 @@ class Game {
         this.ctx.fill();
         
         // Indicatore se il mouse è nel raggio
-        const distFromMage = Utils.distance(this.mage.x, this.mage.y, this.mouseX, this.mouseY);
+        const distFromMage = Utils.distance(this.mage.x, this.mage.y, this.worldMouseX, this.worldMouseY);
         const isInRange = distFromMage <= rangePixels;
-        
-        // Piccolo cerchio al cursore
+
+        // Piccolo cerchio al cursore (usa coordinate mondo)
         this.ctx.beginPath();
-        this.ctx.arc(this.mouseX, this.mouseY, 8, 0, Math.PI * 2);
+        this.ctx.arc(this.worldMouseX, this.worldMouseY, 8, 0, Math.PI * 2);
         this.ctx.fillStyle = isInRange ? 'rgba(0, 255, 136, 0.5)' : 'rgba(255, 0, 0, 0.5)';
         this.ctx.fill();
     }
@@ -320,7 +396,7 @@ class Game {
     // ========================================
     renderSummonDirection() {
         const start = this.summonAimStart;
-        const end = { x: this.mouseX, y: this.mouseY };
+        const end = { x: this.worldMouseX, y: this.worldMouseY };
         
         // Calcola direzione
         const dx = end.x - start.x;
@@ -351,8 +427,8 @@ class Game {
         const ny = dy / dist;
         
         // Estendi la linea fino al bordo della mappa
-        const mapWidth = CONFIG.GRID_WIDTH * CONFIG.TILE_SIZE;
-        const mapHeight = CONFIG.GRID_HEIGHT * CONFIG.TILE_SIZE;
+        const mapWidth = this.map.width * CONFIG.TILE_SIZE;
+        const mapHeight = this.map.height * CONFIG.TILE_SIZE;
         
         // Calcola punto finale (bordo mappa)
         let extendedEnd = { x: end.x, y: end.y };
@@ -612,10 +688,39 @@ class Game {
     getTowerAt(x, y) {
         for (const tower of this.towers) {
             if (!tower.isAlive()) continue;
-            
+
             const dist = Utils.distance(x, y, tower.x, tower.y);
             if (dist <= tower.radius + 10) {
                 return tower;
+            }
+        }
+        return null;
+    }
+
+    // ========================================
+    // TROVA MURO ALLA POSIZIONE
+    // ========================================
+    getWallAt(x, y) {
+        for (const wall of this.walls) {
+            if (!wall.isAlive()) continue;
+
+            const dist = Utils.distance(x, y, wall.x, wall.y);
+            if (dist <= wall.radius + 5) {
+                return wall;
+            }
+        }
+        return null;
+    }
+
+    // ========================================
+    // TROVA MURO ALLA CELLA SPECIFICA
+    // Utile per trovare muri che bloccano il movimento
+    // ========================================
+    getWallAtCell(col, row) {
+        for (const wall of this.walls) {
+            if (!wall.isAlive()) continue;
+            if (wall.col === col && wall.row === row) {
+                return wall;
             }
         }
         return null;
@@ -671,7 +776,7 @@ class Game {
     }
     
     restart() {
-        this.loadLevel(Levels.tutorial);
+        this.loadLevel(Levels.bigMap);
     }
     
     // Toggle debug
@@ -681,5 +786,97 @@ class Game {
     
     toggleTowerRanges() {
         this.showTowerRanges = !this.showTowerRanges;
+    }
+
+    // ========================================
+    // MINI-MAPPA
+    // Mostra una vista dall'alto della mappa intera
+    // ========================================
+    renderMinimap() {
+        const minimapWidth = 150;
+        const minimapHeight = 100;
+        const padding = 10;
+        const x = this.canvas.width - minimapWidth - padding;
+        const y = padding;
+
+        // Calcola scala
+        const worldWidth = this.map.width * CONFIG.TILE_SIZE;
+        const worldHeight = this.map.height * CONFIG.TILE_SIZE;
+        const scaleX = minimapWidth / worldWidth;
+        const scaleY = minimapHeight / worldHeight;
+
+        // Sfondo semi-trasparente
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(x - 2, y - 2, minimapWidth + 4, minimapHeight + 4);
+
+        // Bordo
+        this.ctx.strokeStyle = '#555';
+        this.ctx.lineWidth = 2;
+        this.ctx.strokeRect(x - 2, y - 2, minimapWidth + 4, minimapHeight + 4);
+
+        // Disegna la mappa semplificata
+        const tileWidth = CONFIG.TILE_SIZE * scaleX;
+        const tileHeight = CONFIG.TILE_SIZE * scaleY;
+
+        for (let row = 0; row < this.map.height; row++) {
+            for (let col = 0; col < this.map.width; col++) {
+                const props = this.map.getTileProps(col, row);
+                this.ctx.fillStyle = props.color;
+                this.ctx.fillRect(
+                    x + col * tileWidth,
+                    y + row * tileHeight,
+                    Math.ceil(tileWidth),
+                    Math.ceil(tileHeight)
+                );
+            }
+        }
+
+        // Disegna le torri
+        for (const tower of this.towers) {
+            this.ctx.fillStyle = '#ff0000';
+            this.ctx.beginPath();
+            this.ctx.arc(
+                x + tower.x * scaleX,
+                y + tower.y * scaleY,
+                3, 0, Math.PI * 2
+            );
+            this.ctx.fill();
+        }
+
+        // Disegna le creature
+        for (const creature of this.creatures) {
+            if (creature.isAlive()) {
+                this.ctx.fillStyle = creature.color;
+                this.ctx.beginPath();
+                this.ctx.arc(
+                    x + creature.x * scaleX,
+                    y + creature.y * scaleY,
+                    2, 0, Math.PI * 2
+                );
+                this.ctx.fill();
+            }
+        }
+
+        // Disegna il mago
+        if (this.mage && this.mage.isAlive()) {
+            this.ctx.fillStyle = '#9b59b6';
+            this.ctx.beginPath();
+            this.ctx.arc(
+                x + this.mage.x * scaleX,
+                y + this.mage.y * scaleY,
+                4, 0, Math.PI * 2
+            );
+            this.ctx.fill();
+        }
+
+        // Disegna il rettangolo del viewport
+        this.ctx.strokeStyle = '#ffffff';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(
+            x + this.camera.x * scaleX,
+            y + this.camera.y * scaleY,
+            this.viewportWidth * scaleX,
+            this.viewportHeight * scaleY
+        );
     }
 }
