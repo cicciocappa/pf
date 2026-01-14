@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower Attack - Prototipo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-panel">
+            <div id="resources">
+                <span id="mana-display">Mana: 100</span>
+                <span id="hp-display">HP: 100</span>
+            </div>
+            <div id="spells">
+                <h3>Incantesimi</h3>
+                <button id="btn-fireball" class="spell-btn" data-spell="fireball">
+                    <span class="key">1</span> Palla di Fuoco (10M)
+                </button>
+                <button id="btn-shield" class="spell-btn" data-spell="shield">
+                    <span class="key">2</span> Scudo (5M)
+                </button>
+            </div>
+            <div id="summons">
+                <h3>Evocazioni</h3>
+                <button id="btn-larva" class="summon-btn" data-summon="larva">
+                    <span class="key">Q</span> Larve x5 (5M)
+                </button>
+                <button id="btn-giant" class="summon-btn" data-summon="giant">
+                    <span class="key">W</span> Gigante (15M)
+                </button>
+            </div>
+            <div id="actions">
+                <button id="btn-restart">Ricomincia</button>
+            </div>
+            <div id="instructions">
+                <h3>Controlli</h3>
+                <p><strong>Click destro:</strong> Muovi il mago</p>
+                <p><strong>Click sinistro:</strong> Seleziona/Attacca</p>
+                <p><strong>1-2:</strong> Incantesimi</p>
+                <p><strong>Q-W:</strong> Evocazioni</p>
+            </div>
+            <div id="game-log">
+                <h3>Log</h3>
+                <div id="log-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/pathfinding.js"></script>
+    <script src="js/entities.js"></script>
+    <script src="js/towers.js"></script>
+    <script src="js/spells.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/input.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

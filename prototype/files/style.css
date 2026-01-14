@@ -1,0 +1,209 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #1a1a2e;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #eee;
+    overflow: hidden;
+}
+
+#game-container {
+    display: flex;
+    height: 100vh;
+    gap: 10px;
+    padding: 10px;
+}
+
+#gameCanvas {
+    background: #16213e;
+    border: 2px solid #4a4a6a;
+    border-radius: 4px;
+    cursor: crosshair;
+}
+
+#ui-panel {
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding: 15px;
+    background: #16213e;
+    border: 2px solid #4a4a6a;
+    border-radius: 4px;
+    overflow-y: auto;
+}
+
+#resources {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    background: #0f3460;
+    border-radius: 4px;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+#mana-display {
+    color: #00d4ff;
+}
+
+#hp-display {
+    color: #ff6b6b;
+}
+
+h3 {
+    color: #e94560;
+    margin-bottom: 8px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.spell-btn, .summon-btn {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 8px;
+    background: #0f3460;
+    border: 1px solid #4a4a6a;
+    border-radius: 4px;
+    color: #eee;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s;
+}
+
+.spell-btn:hover, .summon-btn:hover {
+    background: #1a4a7a;
+    border-color: #00d4ff;
+}
+
+.spell-btn:disabled, .summon-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.spell-btn.active {
+    background: #e94560;
+    border-color: #ff6b6b;
+}
+
+.summon-btn.active {
+    background: #00aa66;
+    border-color: #00ff88;
+}
+
+.key {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    background: #4a4a6a;
+    border-radius: 4px;
+    margin-right: 8px;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+#btn-restart {
+    width: 100%;
+    padding: 12px;
+    background: #e94560;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+#btn-restart:hover {
+    background: #ff6b6b;
+}
+
+#instructions {
+    font-size: 12px;
+    color: #aaa;
+    line-height: 1.6;
+}
+
+#instructions p {
+    margin-bottom: 4px;
+}
+
+#game-log {
+    flex: 1;
+    min-height: 100px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+#log-content {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 11px;
+    color: #888;
+    line-height: 1.4;
+    padding: 8px;
+    background: #0a0a1a;
+    border-radius: 4px;
+}
+
+#log-content p {
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #222;
+}
+
+#log-content p:last-child {
+    border-bottom: none;
+}
+
+.log-damage {
+    color: #ff6b6b !important;
+}
+
+.log-summon {
+    color: #00d4ff !important;
+}
+
+.log-spell {
+    color: #ffd700 !important;
+}
+
+.log-death {
+    color: #e94560 !important;
+}
+
+/* Tooltip per le celle */
+#tooltip {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    pointer-events: none;
+    z-index: 1000;
+    display: none;
+}
+
+/* Indicatore selezione attiva */
+.selection-indicator {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(233, 69, 96, 0.9);
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-weight: bold;
+    display: none;
+}
