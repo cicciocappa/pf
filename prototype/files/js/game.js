@@ -165,8 +165,8 @@ class Game {
             const creature = this.creatures[i];
             
             if (creature.isAlive()) {
-                // Passa le torri alla creatura per la logica di ricerca bersagli
-                creature.update(dt, this.map, this.towers, this.pathfinder);
+                // Passa le torri e le mura alla creatura per la logica di ricerca bersagli
+                creature.update(dt, this.map, this.towers, this.pathfinder, this.walls);
                 
                 // Aggiorna stato selezione
                 creature.isSelected = (creature === this.selectedCreature);
@@ -488,47 +488,47 @@ class Game {
     
     // ========================================
     // EVOCAZIONE CON BERSAGLIO DIRETTO
-    // La creatura viene evocata accanto al mago e attacca subito la torre
+    // La creatura viene evocata accanto al mago e attacca subito il bersaglio (torre o muro)
     // ========================================
-    summonCreatureWithTarget(type, targetTower) {
+    summonCreatureWithTarget(type, target) {
         if (!this.mage || !this.mage.isAlive()) return;
-        
+
         const stats = CreatureTypes[type];
         const totalCost = stats.manaCost * stats.spawnCount;
-        
+
         // Verifica mana
         if (this.mage.mana < totalCost) {
             GameLog.log('Mana insufficiente per evocare');
             return;
         }
-        
+
         this.mage.spendMana(totalCost);
-        
-        // Calcola direzione verso la torre per posizionare le creature
-        const dx = targetTower.x - this.mage.x;
-        const dy = targetTower.y - this.mage.y;
+
+        // Calcola direzione verso il bersaglio per posizionare le creature
+        const dx = target.x - this.mage.x;
+        const dy = target.y - this.mage.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const dirX = dist > 0 ? dx / dist : 1;
         const dirY = dist > 0 ? dy / dist : 0;
-        
-        // Spawn creature vicino al mago, nella direzione della torre
+
+        // Spawn creature vicino al mago, nella direzione del bersaglio
         for (let i = 0; i < stats.spawnCount; i++) {
             // Offset dalla posizione del mago
             const spawnDist = 30 + i * 10;
             const angleOffset = (i - stats.spawnCount / 2) * 0.3;
-            
+
             const spawnX = this.mage.x + dirX * spawnDist + Math.cos(angleOffset) * 10;
             const spawnY = this.mage.y + dirY * spawnDist + Math.sin(angleOffset) * 10;
-            
+
             const creature = new Creature(spawnX, spawnY, type);
-            
+
             // Imposta subito il bersaglio
-            creature.setDirectTarget(targetTower, this.map, this.pathfinder);
-            
+            creature.setDirectTarget(target, this.map, this.pathfinder);
+
             this.creatures.push(creature);
         }
-        
-        GameLog.summon(`Evocato: ${stats.spawnCount}x ${stats.name} → ${targetTower.name}`);
+
+        GameLog.summon(`Evocato: ${stats.spawnCount}x ${stats.name} → ${target.name}`);
     }
     
     // ========================================

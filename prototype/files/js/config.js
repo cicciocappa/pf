@@ -175,5 +175,6 @@ const EntityState = {
     MOVING: 'MOVING',
     ATTACKING: 'ATTACKING',
     CASTING: 'CASTING',
-    DEAD: 'DEAD'
+    DEAD: 'DEAD',
+    CLEAR_LINE_PATH: 'CLEAR_LINE_PATH'  // Creatura sta abbattendo ostacolo per raggiungere il target originale
 };

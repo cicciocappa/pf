@@ -326,7 +326,8 @@ class Creature extends Entity {
         // STATO COMBATTIMENTO
         // ========================================
         this.attackCooldown = 0;
-        this.target = null;  // Torre bersaglio corrente
+        this.target = null;         // Bersaglio corrente (torre o muro)
+        this.originalTarget = null; // Bersaglio originale (usato in CLEAR_LINE_PATH)
         
         // ========================================
         // RAGGIO DI VISTA
@@ -415,7 +416,7 @@ class Creature extends Entity {
     // UPDATE PRINCIPALE
     // Gestisce il comportamento in base allo stato
     // ========================================
-    update(dt, gameMap, towers, pathfinder) {
+    update(dt, gameMap, towers, pathfinder, walls = []) {
         // Aggiorna cooldown attacco
         if (this.attackCooldown > 0) {
             this.attackCooldown -= dt;
@@ -446,64 +447,217 @@ class Creature extends Entity {
                 // Segue il percorso calcolato
                 this.followPath(dt, gameMap);
 
-                // Se ignoreTowers è false, cerca torri e reagisce agli attacchi
+                // Se ignoreTowers è false, gestisce target e reazione agli attacchi
                 if (!this.ignoreTowers) {
-                    // Cerca torri nel raggio di vista
-                    const visibleTower = this.findTowerInSight(towers);
-                    if (visibleTower) {
-                        // Trovata una torre! Passa in modalità attacco
-                        this.target = visibleTower;
-                        this.state = EntityState.ATTACKING;
-                        this.moveTargetPoint = null;
-                        this.path = null;
-                        GameLog.log(`${this.name} ha avvistato ${visibleTower.name}!`);
-                        break;
-                    }
-
-                    // Reagisce se viene attaccata
-                    if (this.attackedBy.length > 0) {
-                        this.reactToAttack(towers, gameMap, pathfinder);
-                        this.moveTargetPoint = null;
-                        break;
+                    // Se ha già un target valido assegnato, prosegue verso di esso
+                    if (this.target && this.target.isAlive()) {
+                        // Verifica se siamo arrivati al target
+                        this.checkTargetReached();
+                    } else {
+                        // Non ha un target: reagisce solo se viene attaccata
+                        if (this.attackedBy.length > 0) {
+                            this.reactToAttack(towers, gameMap, pathfinder);
+                            this.moveTargetPoint = null;
+                            break;
+                        }
                     }
                 }
 
-                // Verifica se siamo arrivati alla destinazione
-                this.checkMoveTargetReached();
+                // Verifica se siamo arrivati alla destinazione (per movimento generico)
+                if (!this.target) {
+                    this.checkMoveTargetReached();
+                }
                 break;
-                
+
             case EntityState.ATTACKING:
-                // Attacca la torre bersaglio
-                this.performAttack(dt, gameMap, towers);
+                // Attacca il bersaglio (torre o muro)
+                this.performAttack(dt, gameMap, towers, walls);
                 break;
-                
+
             case 'LOOKING_FOR_TARGET':
-                // Si muove nella direzione indicata cercando torri
-                this.moveAndSearch(dt, gameMap, towers);
+                // Si muove nella direzione indicata cercando bersagli
+                this.moveAndSearch(dt, gameMap, towers, walls);
+                break;
+
+            case EntityState.CLEAR_LINE_PATH:
+                // Sta abbattendo un ostacolo per raggiungere il target originale
+                this.performClearLinePath(dt, gameMap, towers, walls);
                 break;
         }
     }
-    
+
     // ========================================
-    // IMPOSTA UN BERSAGLIO DIRETTO (TORRE)
-    // La creatura si muove verso la torre e la attacca
+    // CLEAR_LINE_PATH: Abbatte ostacolo e torna al target originale
+    // Usato da creature poco intelligenti bloccate da muri
     // ========================================
-    setDirectTarget(tower, gameMap, pathfinder) {
-        this.target = tower;
+    performClearLinePath(dt, gameMap, towers, walls) {
+        // Verifica che abbiamo un ostacolo da abbattere
+        if (!this.target || !this.target.isAlive()) {
+            // Ostacolo distrutto! Torna al target originale
+            if (this.originalTarget && this.originalTarget.isAlive()) {
+                this.target = this.originalTarget;
+                this.originalTarget = null;
+                this.state = EntityState.ATTACKING;
+                GameLog.log(`${this.name} torna ad attaccare ${this.target.name}`);
+            } else {
+                // Anche il target originale è morto, cerca nuovo bersaglio
+                this.originalTarget = null;
+                this.findNextTarget(towers, gameMap, walls);
+            }
+            return;
+        }
+
+        // Calcola distanza dall'ostacolo
+        const dist = Utils.entityDistance(this, this.target);
+        const attackRange = this.radius + this.target.radius + 10;
+
+        if (dist <= attackRange) {
+            // In range: attacca l'ostacolo
+            if (this.attackCooldown <= 0) {
+                this.target.takeDamage(this.damage);
+                GameLog.damage(`${this.name} abbatte ostacolo: ${this.damage} danni a ${this.target.name}`);
+                this.attackCooldown = 1 / this.attackSpeed;
+            }
+        } else {
+            // Avvicinati all'ostacolo (movimento diretto, senza pathfinding)
+            this.moveDirectlyToward(this.target, dt, gameMap);
+        }
+    }
+
+    // ========================================
+    // TROVA IL MURO CHE BLOCCA LA CREATURA
+    // Cerca un muro nella cella specificata
+    // ========================================
+    findBlockingWall(cell, walls) {
+        for (const wall of walls) {
+            if (!wall.isAlive()) continue;
+            if (wall.col === cell.col && wall.row === cell.row) {
+                return wall;
+            }
+        }
+        return null;
+    }
+
+    // ========================================
+    // MOVIMENTO DIRETTO VERSO UN TARGET
+    // Usato in CLEAR_LINE_PATH per avvicinarsi all'ostacolo
+    // ========================================
+    moveDirectlyToward(target, dt, gameMap) {
+        const dx = target.x - this.x;
+        const dy = target.y - this.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > 0) {
+            const currentCell = this.getCell();
+            const speedMult = gameMap.getSpeedMultiplier(currentCell.col, currentCell.row);
+            const actualSpeed = this.speed * speedMult;
+
+            const moveX = (dx / dist) * actualSpeed * dt;
+            const moveY = (dy / dist) * actualSpeed * dt;
+
+            this.x += moveX;
+            this.y += moveY;
+        }
+    }
+
+    // ========================================
+    // IMPOSTA UN BERSAGLIO DIRETTO (torre o muro)
+    // La creatura si muove verso il bersaglio e lo attacca
+    // ========================================
+    setDirectTarget(target, gameMap, pathfinder) {
+        this.target = target;
         this.moveDirection = null;
         this.destinationPoint = null;
-        
-        // Calcola il percorso verso la torre
-        const success = this.moveTo(tower.x, tower.y, gameMap, pathfinder);
-        
+
+        // Calcola il percorso verso il bersaglio
+        let success = this.moveTo(target.x, target.y, gameMap, pathfinder);
+
+        // Se il percorso diretto fallisce (es. target su cella non camminabile),
+        // prova a trovare una cella adiacente camminabile
+        if (!success) {
+            const adjacentPoint = this.findAdjacentWalkablePoint(target, gameMap);
+            if (adjacentPoint) {
+                success = this.moveTo(adjacentPoint.x, adjacentPoint.y, gameMap, pathfinder);
+            }
+        }
+
         if (success) {
             this.state = EntityState.MOVING;
-            GameLog.log(`${this.name} si dirige verso ${tower.name}`);
+            GameLog.log(`${this.name} si dirige verso ${target.name}`);
         } else {
-            // Se non c'è percorso, prova ad avvicinarsi comunque
-            GameLog.log(`${this.name}: percorso non trovato`);
+            // Se non c'è percorso, resta in IDLE con il target impostato
+            GameLog.log(`${this.name}: impossibile raggiungere ${target.name}`);
             this.state = EntityState.IDLE;
         }
+    }
+
+    // ========================================
+    // TROVA UN PUNTO ADIACENTE CAMMINABILE AL TARGET
+    // Usato quando il target è su una cella non camminabile (es. muro)
+    // Preferisce celle ortogonali (più vicine) rispetto alle diagonali
+    // ========================================
+    findAdjacentWalkablePoint(target, gameMap) {
+        const targetCell = target.getCell ? target.getCell() : Utils.pixelToGrid(target.x, target.y);
+
+        // Prima prova le celle ortogonali (più vicine al target)
+        const orthogonal = [
+            { dc: -1, dr: 0 },  // sinistra
+            { dc: 1, dr: 0 },   // destra
+            { dc: 0, dr: -1 },  // sopra
+            { dc: 0, dr: 1 }    // sotto
+        ];
+
+        // Poi le diagonali (più lontane)
+        const diagonal = [
+            { dc: -1, dr: -1 },
+            { dc: 1, dr: -1 },
+            { dc: -1, dr: 1 },
+            { dc: 1, dr: 1 }
+        ];
+
+        // Cerca prima tra le ortogonali
+        let bestPoint = null;
+        let bestDist = Infinity;
+
+        for (const dir of orthogonal) {
+            const adjCol = targetCell.col + dir.dc;
+            const adjRow = targetCell.row + dir.dr;
+
+            if (gameMap.isWalkable(adjCol, adjRow)) {
+                const adjX = adjCol * CONFIG.TILE_SIZE + CONFIG.TILE_SIZE / 2;
+                const adjY = adjRow * CONFIG.TILE_SIZE + CONFIG.TILE_SIZE / 2;
+                const dist = Utils.distance(this.x, this.y, adjX, adjY);
+
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestPoint = { x: adjX, y: adjY };
+                }
+            }
+        }
+
+        // Se trovata una cella ortogonale, usala
+        if (bestPoint) {
+            return bestPoint;
+        }
+
+        // Altrimenti cerca tra le diagonali
+        for (const dir of diagonal) {
+            const adjCol = targetCell.col + dir.dc;
+            const adjRow = targetCell.row + dir.dr;
+
+            if (gameMap.isWalkable(adjCol, adjRow)) {
+                const adjX = adjCol * CONFIG.TILE_SIZE + CONFIG.TILE_SIZE / 2;
+                const adjY = adjRow * CONFIG.TILE_SIZE + CONFIG.TILE_SIZE / 2;
+                const dist = Utils.distance(this.x, this.y, adjX, adjY);
+
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestPoint = { x: adjX, y: adjY };
+                }
+            }
+        }
+
+        return bestPoint;
     }
     
     // ========================================
@@ -634,56 +788,77 @@ class Creature extends Entity {
     // MOVIMENTO CON RICERCA TORRI
     // Usato nello stato LOOKING_FOR_TARGET
     // ========================================
-    moveAndSearch(dt, gameMap, towers) {
+    moveAndSearch(dt, gameMap, towers, walls = []) {
         // Segue il percorso
         this.followPath(dt, gameMap);
-        
+
         // ----------------------------------------
-        // Cerca torri nel raggio di vista
+        // Cerca bersagli (torri o mura) nel raggio di vista
         // ----------------------------------------
-        const visibleTower = this.findTowerInSight(towers);
-        
-        if (visibleTower) {
-            // Trovata una torre! Passa in modalità attacco
-            this.target = visibleTower;
+        const visibleTarget = this.findTargetInSight(towers, walls);
+
+        if (visibleTarget) {
+            // Trovato un bersaglio! Passa in modalità attacco
+            this.target = visibleTarget;
             this.state = EntityState.ATTACKING;
             this.moveDirection = null;
-            GameLog.log(`${this.name} ha avvistato ${visibleTower.name}!`);
+            GameLog.log(`${this.name} ha avvistato ${visibleTarget.name}!`);
             return;
         }
-        
+
         // ----------------------------------------
-        // Se abbiamo raggiunto la destinazione senza trovare torri
+        // Se abbiamo raggiunto la destinazione senza trovare bersagli
         // ----------------------------------------
-        if (this.state === 'LOOKING_FOR_TARGET' && 
+        if (this.state === 'LOOKING_FOR_TARGET' &&
             (!this.path || this.pathIndex >= this.path.length)) {
             // Arrivato al bordo senza trovare nulla
             this.state = EntityState.IDLE;
             this.moveDirection = null;
             this.destinationPoint = null;
-            GameLog.log(`${this.name} è in attesa (nessuna torre trovata)`);
+            GameLog.log(`${this.name} è in attesa (nessun bersaglio trovato)`);
         }
     }
     
     // ========================================
     // TROVA TORRE NEL RAGGIO DI VISTA
-    // Restituisce la torre più vicina visibile, o null
+    // Restituisce il bersaglio più vicino visibile (torre o muro), o null
+    // Priorità: torri prima delle mura (le torri sono più pericolose)
     // ========================================
-    findTowerInSight(towers) {
+    findTargetInSight(towers, walls = []) {
         let closestTower = null;
-        let closestDist = this.sightRange;
-        
+        let closestTowerDist = this.sightRange;
+
+        // Prima cerca tra le torri (priorità alta)
         for (const tower of towers) {
             if (!tower.isAlive()) continue;
-            
+
             const dist = Utils.entityDistance(this, tower);
-            if (dist < closestDist) {
-                closestDist = dist;
+            if (dist < closestTowerDist) {
+                closestTowerDist = dist;
                 closestTower = tower;
             }
         }
-        
-        return closestTower;
+
+        // Se c'è una torre visibile, attacca quella
+        if (closestTower) {
+            return closestTower;
+        }
+
+        // Altrimenti cerca tra le mura
+        let closestWall = null;
+        let closestWallDist = this.sightRange;
+
+        for (const wall of walls) {
+            if (!wall.isAlive()) continue;
+
+            const dist = Utils.entityDistance(this, wall);
+            if (dist < closestWallDist) {
+                closestWallDist = dist;
+                closestWall = wall;
+            }
+        }
+
+        return closestWall;
     }
     
     // ========================================
@@ -711,6 +886,9 @@ class Creature extends Entity {
             // Siamo in range di attacco!
             this.state = EntityState.ATTACKING;
             this.path = null;
+        } else if (!this.path || this.pathIndex >= this.path.length) {
+            // Path finito ma non siamo in range: passa in ATTACKING per avvicinarsi
+            this.state = EntityState.ATTACKING;
         }
     }
 
@@ -745,20 +923,20 @@ class Creature extends Entity {
     }
     
     // ========================================
-    // ESEGUE L'ATTACCO ALLA TORRE
+    // ESEGUE L'ATTACCO AL BERSAGLIO (torre o muro)
     // ========================================
-    performAttack(dt, gameMap, towers) {
+    performAttack(dt, gameMap, towers, walls = []) {
         // Verifica che il target sia ancora valido
         if (!this.target || !this.target.isAlive()) {
             // Target distrutto! Cerca il prossimo
-            this.findNextTarget(towers, gameMap);
+            this.findNextTarget(towers, gameMap, walls);
             return;
         }
-        
+
         // Calcola distanza
         const dist = Utils.entityDistance(this, this.target);
         const attackRange = this.radius + this.target.radius + 10;
-        
+
         if (dist <= attackRange) {
             // ----------------------------------------
             // IN RANGE: Attacca!
@@ -767,61 +945,86 @@ class Creature extends Entity {
                 const damage = this.target.takeDamage(this.damage);
                 GameLog.damage(`${this.name} infligge ${this.damage} danni a ${this.target.name}`);
                 this.attackCooldown = 1 / this.attackSpeed;
-                
-                // Se la torre è stata distrutta, cerca il prossimo target
+
+                // Se il bersaglio è stato distrutto, cerca il prossimo target
                 if (!this.target.isAlive()) {
-                    this.findNextTarget(towers, gameMap);
+                    this.findNextTarget(towers, gameMap, walls);
                 }
             }
         } else {
             // ----------------------------------------
             // FUORI RANGE: Avvicinati
             // ----------------------------------------
-            // Movimento semplice verso il target
-            const dx = this.target.x - this.x;
-            const dy = this.target.y - this.y;
-            const norm = Math.sqrt(dx * dx + dy * dy);
+            if (this.useDirectMovement) {
+                // ========================================
+                // MOVIMENTO DIRETTO (creature poco intelligenti)
+                // ========================================
+                const dx = this.target.x - this.x;
+                const dy = this.target.y - this.y;
+                const norm = Math.sqrt(dx * dx + dy * dy);
 
-            if (norm > 0) {
-                const currentCell = this.getCell();
-                const speedMult = gameMap.getSpeedMultiplier(currentCell.col, currentCell.row);
-                const actualSpeed = this.speed * speedMult;
+                if (norm > 0) {
+                    const currentCell = this.getCell();
+                    const speedMult = gameMap.getSpeedMultiplier(currentCell.col, currentCell.row);
+                    const actualSpeed = this.speed * speedMult;
 
-                // Calcola la nuova posizione
-                const moveX = (dx / norm) * actualSpeed * dt;
-                const moveY = (dy / norm) * actualSpeed * dt;
-                const newX = this.x + moveX;
-                const newY = this.y + moveY;
+                    const moveX = (dx / norm) * actualSpeed * dt;
+                    const moveY = (dy / norm) * actualSpeed * dt;
+                    const newX = this.x + moveX;
+                    const newY = this.y + moveY;
 
-                // Verifica se la nuova posizione è camminabile
-                const newCell = Utils.pixelToGrid(newX, newY);
+                    const newCell = Utils.pixelToGrid(newX, newY);
 
-                if (gameMap.isWalkable(newCell.col, newCell.row)) {
-                    // Cella camminabile, muoviti
-                    this.x = newX;
-                    this.y = newY;
-                } else if (this.useDirectMovement) {
-                    // ----------------------------------------
-                    // MOVIMENTO DIRETTO: Bloccato da un muro!
-                    // Prova a muoversi solo su un asse
-                    // ----------------------------------------
-                    const cellX = Utils.pixelToGrid(newX, this.y);
-                    const cellY = Utils.pixelToGrid(this.x, newY);
-
-                    // Prova movimento solo orizzontale
-                    if (gameMap.isWalkable(cellX.col, cellX.row)) {
+                    if (gameMap.isWalkable(newCell.col, newCell.row)) {
                         this.x = newX;
+                        this.y = newY;
+                    } else {
+                        // Bloccato! Cerca muro da abbattere
+                        const blockingWall = this.findBlockingWall(newCell, walls);
+                        if (blockingWall) {
+                            this.originalTarget = this.target;
+                            this.target = blockingWall;
+                            this.state = EntityState.CLEAR_LINE_PATH;
+                            GameLog.log(`${this.name} bloccato! Abbatte ${blockingWall.name}`);
+                        } else {
+                            // Prova a scivolare
+                            const cellX = Utils.pixelToGrid(newX, this.y);
+                            const cellY = Utils.pixelToGrid(this.x, newY);
+
+                            if (gameMap.isWalkable(cellX.col, cellX.row)) {
+                                this.x = newX;
+                            } else if (gameMap.isWalkable(cellY.col, cellY.row)) {
+                                this.y = newY;
+                            }
+                        }
                     }
-                    // Prova movimento solo verticale
-                    else if (gameMap.isWalkable(cellY.col, cellY.row)) {
+                }
+            } else {
+                // ========================================
+                // MOVIMENTO VERSO TARGET (creature intelligenti, senza path)
+                // Muoviti direttamente verso il target
+                // ========================================
+                const dx = this.target.x - this.x;
+                const dy = this.target.y - this.y;
+                const norm = Math.sqrt(dx * dx + dy * dy);
+
+                if (norm > 0) {
+                    const currentCell = this.getCell();
+                    const speedMult = gameMap.getSpeedMultiplier(currentCell.col, currentCell.row);
+                    const actualSpeed = this.speed * speedMult;
+
+                    const moveX = (dx / norm) * actualSpeed * dt;
+                    const moveY = (dy / norm) * actualSpeed * dt;
+                    const newX = this.x + moveX;
+                    const newY = this.y + moveY;
+
+                    const newCell = Utils.pixelToGrid(newX, newY);
+
+                    if (gameMap.isWalkable(newCell.col, newCell.row)) {
+                        this.x = newX;
                         this.y = newY;
                     }
-                    // Completamente bloccato - resta fermo
-                    // (la creatura continuerà a provare nel prossimo frame)
-                } else {
-                    // Movimento con pathfinding fallito, non dovrebbe succedere
-                    this.x = newX;
-                    this.y = newY;
+                    // Se bloccato, resta fermo (creature intelligenti non abbattono muri)
                 }
             }
         }
@@ -830,32 +1033,41 @@ class Creature extends Entity {
     // ========================================
     // TROVA IL PROSSIMO BERSAGLIO
     // Logica di priorità:
-    // 1. Torri che ci stanno attaccando (priorità a HP*DAMAGE più basso)
-    // 2. Torri nel raggio di vista (priorità a HP*DAMAGE più basso)
-    // 3. Nessuna torre trovata -> IDLE
+    // 1. Torri che ci stanno attaccando (priorità a HP*DAMAGE più basso, poi distanza)
+    // 2. Torri nel raggio di vista (priorità a HP*DAMAGE più basso, poi distanza)
+    // 3. Mura nel raggio di vista (priorità a HP più basso, poi distanza)
+    // 4. Nessun bersaglio trovato -> IDLE
+    // A parità di score, sceglie il bersaglio più vicino
     // ========================================
-    findNextTarget(towers, gameMap) {
+    findNextTarget(towers, gameMap, walls = []) {
         this.target = null;
-        
+        const self = this;
+
         // ----------------------------------------
         // PRIORITÀ 1: Torri che ci stanno attaccando
         // ----------------------------------------
         const attackers = this.attackedBy.filter(t => t.isAlive());
-        
+
         if (attackers.length > 0) {
-            // Ordina per HP * DAMAGE (priorità al più basso = più facile da eliminare)
+            // Ordina per HP * DAMAGE, poi per distanza a parità di score
             attackers.sort((a, b) => {
                 const scoreA = a.hp * a.damage;
                 const scoreB = b.hp * b.damage;
-                return scoreA - scoreB;
+                if (scoreA !== scoreB) return scoreA - scoreB;
+                // A parità di score, sceglie il più vicino
+                const distA = Utils.entityDistance(self, a);
+                const distB = Utils.entityDistance(self, b);
+                return distA - distB;
             });
-            
+
             this.target = attackers[0];
             this.state = EntityState.ATTACKING;
+            // Creature poco intelligenti usano movimento diretto (possono bloccarsi)
+            this.useDirectMovement = this.intelligence < 0.5;
             GameLog.log(`${this.name} contrattacca ${this.target.name}!`);
             return;
         }
-        
+
         // ----------------------------------------
         // PRIORITÀ 2: Torri nel raggio di vista
         // ----------------------------------------
@@ -864,21 +1076,52 @@ class Creature extends Entity {
             const dist = Utils.entityDistance(this, t);
             return dist <= this.sightRange;
         });
-        
+
         if (visibleTowers.length > 0) {
-            // Ordina per HP * DAMAGE
+            // Ordina per HP * DAMAGE, poi per distanza a parità di score
             visibleTowers.sort((a, b) => {
                 const scoreA = a.hp * a.damage;
                 const scoreB = b.hp * b.damage;
-                return scoreA - scoreB;
+                if (scoreA !== scoreB) return scoreA - scoreB;
+                // A parità di score, sceglie il più vicino
+                const distA = Utils.entityDistance(self, a);
+                const distB = Utils.entityDistance(self, b);
+                return distA - distB;
             });
-            
+
             this.target = visibleTowers[0];
             this.state = EntityState.ATTACKING;
+            this.useDirectMovement = false; // Usa pathfinding
             GameLog.log(`${this.name} attacca ${this.target.name}`);
             return;
         }
-        
+
+        // ----------------------------------------
+        // PRIORITÀ 3: Mura nel raggio di vista
+        // ----------------------------------------
+        const visibleWalls = walls.filter(w => {
+            if (!w.isAlive()) return false;
+            const dist = Utils.entityDistance(this, w);
+            return dist <= this.sightRange;
+        });
+
+        if (visibleWalls.length > 0) {
+            // Ordina per HP, poi per distanza a parità di HP
+            visibleWalls.sort((a, b) => {
+                if (a.hp !== b.hp) return a.hp - b.hp;
+                // A parità di HP, sceglie il più vicino
+                const distA = Utils.entityDistance(self, a);
+                const distB = Utils.entityDistance(self, b);
+                return distA - distB;
+            });
+
+            this.target = visibleWalls[0];
+            this.state = EntityState.ATTACKING;
+            this.useDirectMovement = false; // Usa pathfinding
+            GameLog.log(`${this.name} attacca ${this.target.name}`);
+            return;
+        }
+
         // ----------------------------------------
         // NESSUN BERSAGLIO: vai in IDLE
         // ----------------------------------------

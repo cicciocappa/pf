@@ -231,11 +231,11 @@ class InputHandler {
                 if (clickedCreature) {
                     // Selezioniamo la nuova creatura (già gestito in mousedown)
                 }
-                // Verifica se abbiamo cliccato su una torre
-                else if (this.game.getTowerAt(x, y)) {
-                    // Se clicchiamo su una torre, attaccala
-                    const tower = this.game.getTowerAt(x, y);
-                    this.selectedCreature.setDirectTarget(tower, this.game.map, this.game.pathfinder);
+                // Verifica se abbiamo cliccato su una torre o muro
+                else if (this.game.getTowerAt(x, y) || this.game.getWallAt(x, y)) {
+                    // Se clicchiamo su una torre o muro, attaccalo
+                    const target = this.game.getTowerAt(x, y) || this.game.getWallAt(x, y);
+                    this.selectedCreature.setDirectTarget(target, this.game.map, this.game.pathfinder);
                 }
                 // Click su punto vuoto = ordine di movimento
                 else {
@@ -282,22 +282,22 @@ class InputHandler {
         // CASO 3: Creatura selezionata - ordine di attacco
         // ------------------------------
         if (this.selectedCreature && this.selectedCreature.isAlive()) {
-            const clickedTower = this.game.getTowerAt(x, y);
-            if (clickedTower) {
-                // Ordina alla creatura di attaccare la torre
-                this.selectedCreature.setDirectTarget(clickedTower, this.game.map, this.game.pathfinder);
-                GameLog.log(`${this.selectedCreature.name} attacca ${clickedTower.name}`);
+            const clickedTarget = this.game.getTowerAt(x, y) || this.game.getWallAt(x, y);
+            if (clickedTarget) {
+                // Ordina alla creatura di attaccare il bersaglio
+                this.selectedCreature.setDirectTarget(clickedTarget, this.game.map, this.game.pathfinder);
+                GameLog.log(`${this.selectedCreature.name} attacca ${clickedTarget.name}`);
             }
             return;
         }
-        
+
         // ------------------------------
-        // CASO 4: Click su torre senza creature selezionate
+        // CASO 4: Click su torre/muro senza creature selezionate
         // Ordina a TUTTE le creature di attaccare
         // ------------------------------
-        const clickedTower = this.game.getTowerAt(x, y);
-        if (clickedTower) {
-            this.game.orderAllCreaturesToAttack(clickedTower);
+        const clickedTarget = this.game.getTowerAt(x, y) || this.game.getWallAt(x, y);
+        if (clickedTarget) {
+            this.game.orderAllCreaturesToAttack(clickedTarget);
         }
     }
     
@@ -325,18 +325,25 @@ class InputHandler {
     handleSummonMouseDown(x, y) {
         const mage = this.game.mage;
         if (!mage || !mage.isAlive()) return;
-        
+
         // Calcola distanza dal mago
         const distFromMage = Utils.distance(mage.x, mage.y, x, y);
         const summonRange = CONFIG.SUMMON_RANGE * CONFIG.TILE_SIZE;
-        
+
         // ------------------------------
-        // CASO A: Click su una torre (qualsiasi distanza)
-        // La creatura viene evocata accanto al mago e attacca la torre
+        // CASO A: Click su una torre o muro (qualsiasi distanza)
+        // La creatura viene evocata accanto al mago e attacca il bersaglio
         // ------------------------------
         const clickedTower = this.game.getTowerAt(x, y);
         if (clickedTower) {
             this.game.summonCreatureWithTarget(this.pendingSummonType, clickedTower);
+            this.cancelSummonMode();
+            return;
+        }
+
+        const clickedWall = this.game.getWallAt(x, y);
+        if (clickedWall) {
+            this.game.summonCreatureWithTarget(this.pendingSummonType, clickedWall);
             this.cancelSummonMode();
             return;
         }
