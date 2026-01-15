@@ -226,6 +226,18 @@ const Levels = {
             { type: 'GUARD_TOWER', col: 5, row: 9 },
             { type: 'GUARD_TOWER', col: 14, row: 9 }
         ],
+        // Muri presidiati - arcieri + olio bollente
+        garrisonedWalls: [
+            // Muri presidiati intorno alla torre centrale
+            { col: 8, row: 7 },
+            { col: 10, row: 7 },
+            // Muri presidiati sul lato sinistro
+            { col: 3, row: 4 },
+            { col: 3, row: 10 },
+            // Muri presidiati sul lato destro
+            { col: 16, row: 4 },
+            { col: 16, row: 10 }
+        ],
         mageStart: { col: 0, row: 7 },
         treasurePos: { col: 18, row: 7 }
     },

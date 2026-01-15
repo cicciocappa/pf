@@ -23,9 +23,8 @@ class Game {
         // Entità
         this.mage = null;
         this.creatures = [];
-        this.towers = [];
-        this.walls = [];  // Muri distruggibili
-        
+        this.structures = [];  // Array unificato di strutture difensive (torri e mura)
+
         // Stato gioco
         this.state = 'playing';  // playing, won, lost
         this.selectedSpell = null;
@@ -49,7 +48,12 @@ class Game {
         // ========================================
         this.summonAimStart = null;
         this.summonAimEnd = null;
-        
+
+        // ========================================
+        // MINIMAPPA INTERATTIVA
+        // ========================================
+        this.minimapBounds = null;  // Sarà impostato in renderMinimap
+
         // Timing
         this.lastTime = 0;
         this.accumulator = 0;
@@ -61,13 +65,24 @@ class Game {
         this.canvas.width = this.viewportWidth;
         this.canvas.height = this.viewportHeight;
     }
-    
+
+    // ========================================
+    // GETTER per retrocompatibilità
+    // Filtrano l'array unificato structures
+    // ========================================
+    get towers() {
+        return this.structures.filter(s => !s.isWall);
+    }
+
+    get walls() {
+        return this.structures.filter(s => s.isWall);
+    }
+
     // Carica un livello
     loadLevel(levelData) {
         // Reset
         this.creatures = [];
-        this.towers = [];
-        this.walls = [];
+        this.structures = [];
         this.state = 'playing';
         this.selectedSpell = null;
         this.selectedCreature = null;
@@ -78,12 +93,12 @@ class Game {
         // Carica mappa (potrebbe ridimensionare la griglia)
         this.map.loadLevel(levelData.map);
 
-        // Crea entità Wall per ogni tile WALL
+        // Crea strutture Wall per ogni tile WALL
         for (let row = 0; row < this.map.height; row++) {
             for (let col = 0; col < this.map.width; col++) {
                 if (this.map.getTile(col, row) === Tile.WALL) {
                     const wall = createWall(col, row);
-                    this.walls.push(wall);
+                    this.structures.push(wall);
                 }
             }
         }
@@ -99,11 +114,27 @@ class Game {
         // Crea torri
         for (const towerDef of levelData.towers) {
             const tower = createTower(towerDef.type, towerDef.col, towerDef.row);
-            this.towers.push(tower);
+            this.structures.push(tower);
         }
 
-        // Aggiorna danger map
-        this.map.updateDangerMap(this.towers);
+        // Crea muri presidiati (sostituiscono i muri normali in quelle posizioni)
+        if (levelData.garrisonedWalls) {
+            for (const gwDef of levelData.garrisonedWalls) {
+                // Trova e rimuovi il muro normale in questa posizione
+                const idx = this.structures.findIndex(s =>
+                    s.isWall && s.col === gwDef.col && s.row === gwDef.row
+                );
+                if (idx !== -1) {
+                    this.structures.splice(idx, 1);
+                }
+                // Crea il muro presidiato
+                const gw = createGarrisonedWall(gwDef.col, gwDef.row);
+                this.structures.push(gw);
+            }
+        }
+
+        // Aggiorna danger map (torri e muri presidiati che possono attaccare)
+        this.map.updateDangerMap(this.structures.filter(s => s.canAttack()));
 
         // Crea mago
         const magePos = Utils.gridToPixel(levelData.mageStart.col, levelData.mageStart.row);
@@ -180,41 +211,60 @@ class Game {
             }
         }
         
-        // Ottieni tutti i nemici per le torri
+        // Ottieni tutti i nemici per le strutture difensive
         const allEnemies = this.mage ? [this.mage, ...this.creatures] : [...this.creatures];
-        
-        // Update torri
-        for (let i = this.towers.length - 1; i >= 0; i--) {
-            const tower = this.towers[i];
+        const aliveEnemies = allEnemies.filter(e => e.isAlive());
 
-            if (tower.isAlive()) {
-                tower.update(dt, allEnemies.filter(e => e.isAlive()));
+        // Update strutture (torri e mura unificate)
+        let needDangerMapUpdate = false;
+        let needPathfinderUpdate = false;
+
+        for (let i = this.structures.length - 1; i >= 0; i--) {
+            const structure = this.structures[i];
+
+            if (structure.isAlive()) {
+                // Aggiorna la struttura (attacco ranged e melee se applicabile)
+                structure.update(dt, aliveEnemies);
             } else {
-                // Torre distrutta
-                this.towers.splice(i, 1);
-                // Aggiorna danger map
-                this.map.updateDangerMap(this.towers);
+                // Struttura distrutta
+                if (structure.isWall) {
+                    // Muro distrutto - cambia il tile a DIRT
+                    this.map.setTile(structure.col, structure.row, Tile.DIRT);
+                    needPathfinderUpdate = true;
+                    // Se era un muro presidiato, aggiorna anche danger map
+                    if (structure.canAttack()) {
+                        needDangerMapUpdate = true;
+                    }
+                } else {
+                    // Torre distrutta - aggiorna danger map
+                    needDangerMapUpdate = true;
+                }
+                this.structures.splice(i, 1);
             }
         }
 
-        // Update muri (gestisce distruzione)
-        for (let i = this.walls.length - 1; i >= 0; i--) {
-            const wall = this.walls[i];
+        // Aggiorna danger map se necessario (strutture che possono attaccare)
+        if (needDangerMapUpdate) {
+            this.map.updateDangerMap(this.structures.filter(s => s.canAttack()));
+        }
 
-            if (!wall.isAlive()) {
-                // Muro distrutto - cambia il tile a DIRT
-                this.map.setTile(wall.col, wall.row, Tile.DIRT);
-                this.walls.splice(i, 1);
-                // Aggiorna pathfinder perché la mappa è cambiata
-                this.pathfinder = new Pathfinder(this.map);
-            }
+        // Aggiorna pathfinder se necessario
+        if (needPathfinderUpdate) {
+            this.pathfinder = new Pathfinder(this.map);
         }
 
         // Update sistema incantesimi
         this.spellSystem.update(dt);
 
-        // Update camera
-        this.camera.update(dt);
+        // Edge scrolling (gestito dall'input handler)
+        if (typeof inputHandler !== 'undefined' && inputHandler) {
+            inputHandler.applyEdgeScrolling(dt);
+        }
+
+        // Update camera (solo se spazio premuto per snap)
+        if (typeof inputHandler !== 'undefined' && inputHandler && inputHandler.spacePressed) {
+            this.camera.update(dt);
+        }
 
         // Update UI
         this.updateUI();
@@ -239,11 +289,18 @@ class Game {
         this.renderHoveredCell();
 
         // ========================================
-        // RENDER RAGGIO DI EVOCAZIONE
-        // Mostra il cerchio entro cui si può evocare
+        // RENDER GHOST PREVIEW (evocazione/spell)
         // ========================================
-        if (inputHandler && inputHandler.pendingSummonType && this.mage) {
-            this.renderSummonRange();
+        if (inputHandler && this.mage) {
+            // Evocazione in preparazione
+            if (inputHandler.preparationType === 'SUMMON') {
+                this.renderSummonRange();
+                this.renderSummonGhost();
+            }
+            // Spell in preparazione
+            else if (inputHandler.preparationType === 'SPELL') {
+                this.renderSpellGhost();
+            }
         }
 
         // ========================================
@@ -254,16 +311,16 @@ class Game {
             this.renderSummonDirection();
         }
 
-        // Muri (rendere prima delle torri)
-        for (const wall of this.walls) {
-            if (wall.isAlive()) {
-                wall.render(this.ctx);
+        // Strutture difensive (muri prima, poi torri per layering corretto)
+        for (const structure of this.structures) {
+            if (structure.isAlive() && structure.isWall) {
+                structure.render(this.ctx, this.showTowerRanges);
             }
         }
-
-        // Range torri (se abilitato)
-        for (const tower of this.towers) {
-            tower.render(this.ctx, this.showTowerRanges);
+        for (const structure of this.structures) {
+            if (structure.isAlive() && !structure.isWall) {
+                structure.render(this.ctx, this.showTowerRanges);
+            }
         }
 
         // Creature
@@ -283,15 +340,6 @@ class Game {
 
         // Effetti incantesimi
         this.spellSystem.render(this.ctx);
-
-        // Preview incantesimo selezionato (usa coordinate mondo)
-        if (this.selectedSpell && this.mage) {
-            const isValid = this.spellSystem.isInCastRange(
-                this.mage, this.worldMouseX, this.worldMouseY, this.selectedSpell
-            );
-            this.spellSystem.renderCastRange(this.ctx, this.mage, this.selectedSpell);
-            renderSpellPreview(this.ctx, this.selectedSpell, this.worldMouseX, this.worldMouseY, isValid);
-        }
 
         // ========================================
         // FINE RENDERING CON CAMERA
@@ -378,17 +426,124 @@ class Game {
         this.ctx.fillStyle = 'rgba(0, 255, 136, 0.1)';
         this.ctx.fill();
         
-        // Indicatore se il mouse è nel raggio
+    }
+
+    // ========================================
+    // RENDER SUMMON GHOST
+    // Mostra un'anteprima della creatura al cursore
+    // ========================================
+    renderSummonGhost() {
+        const summonType = inputHandler.preparedAction;
+        const stats = CreatureTypes[summonType];
+        if (!stats) return;
+
+        const rangePixels = CONFIG.SUMMON_RANGE * CONFIG.TILE_SIZE;
         const distFromMage = Utils.distance(this.mage.x, this.mage.y, this.worldMouseX, this.worldMouseY);
         const isInRange = distFromMage <= rangePixels;
 
-        // Piccolo cerchio al cursore (usa coordinate mondo)
+        // Ghost della creatura
         this.ctx.beginPath();
-        this.ctx.arc(this.worldMouseX, this.worldMouseY, 8, 0, Math.PI * 2);
-        this.ctx.fillStyle = isInRange ? 'rgba(0, 255, 136, 0.5)' : 'rgba(255, 0, 0, 0.5)';
+        this.ctx.arc(this.worldMouseX, this.worldMouseY, stats.radius || 10, 0, Math.PI * 2);
+
+        if (isInRange) {
+            // Valido: cerchio verde semi-trasparente
+            this.ctx.fillStyle = 'rgba(0, 255, 136, 0.4)';
+            this.ctx.strokeStyle = '#00ff88';
+        } else {
+            // Non valido: X rossa
+            this.ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+            this.ctx.strokeStyle = '#ff0000';
+        }
+
         this.ctx.fill();
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
+
+        // Se non valido, mostra X
+        if (!isInRange) {
+            this.ctx.strokeStyle = '#ff0000';
+            this.ctx.lineWidth = 3;
+            const size = 12;
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.worldMouseX - size, this.worldMouseY - size);
+            this.ctx.lineTo(this.worldMouseX + size, this.worldMouseY + size);
+            this.ctx.moveTo(this.worldMouseX + size, this.worldMouseY - size);
+            this.ctx.lineTo(this.worldMouseX - size, this.worldMouseY + size);
+            this.ctx.stroke();
+        }
+
+        // Nome creatura
+        this.ctx.fillStyle = isInRange ? '#00ff88' : '#ff6666';
+        this.ctx.font = 'bold 10px Arial';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'bottom';
+        this.ctx.fillText(stats.name, this.worldMouseX, this.worldMouseY - (stats.radius || 10) - 5);
     }
-    
+
+    // ========================================
+    // RENDER SPELL GHOST
+    // Mostra anteprima dello spell al cursore
+    // ========================================
+    renderSpellGhost() {
+        const spellType = inputHandler.preparedAction;
+        const spell = SpellTypes[spellType];
+        if (!spell) return;
+
+        const rangePixels = spell.castRange * CONFIG.TILE_SIZE;
+        const distFromMage = Utils.distance(this.mage.x, this.mage.y, this.worldMouseX, this.worldMouseY);
+        const isInRange = rangePixels === 0 || distFromMage <= rangePixels;
+
+        // Disegna range dello spell
+        if (rangePixels > 0) {
+            this.ctx.beginPath();
+            this.ctx.arc(this.mage.x, this.mage.y, rangePixels, 0, Math.PI * 2);
+            this.ctx.strokeStyle = isInRange ? 'rgba(255, 100, 0, 0.5)' : 'rgba(255, 0, 0, 0.3)';
+            this.ctx.lineWidth = 2;
+            this.ctx.setLineDash([8, 4]);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]);
+        }
+
+        // Area effetto dello spell
+        if (spell.radius) {
+            const effectRadius = spell.radius * CONFIG.TILE_SIZE;
+            this.ctx.beginPath();
+            this.ctx.arc(this.worldMouseX, this.worldMouseY, effectRadius, 0, Math.PI * 2);
+
+            if (isInRange) {
+                this.ctx.fillStyle = `rgba(255, 100, 0, 0.3)`;
+                this.ctx.strokeStyle = spell.color || '#ff6400';
+            } else {
+                this.ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
+                this.ctx.strokeStyle = '#ff0000';
+            }
+
+            this.ctx.fill();
+            this.ctx.lineWidth = 2;
+            this.ctx.stroke();
+        }
+
+        // Se non valido, mostra X
+        if (!isInRange) {
+            this.ctx.strokeStyle = '#ff0000';
+            this.ctx.lineWidth = 3;
+            const size = 15;
+            this.ctx.beginPath();
+            this.ctx.moveTo(this.worldMouseX - size, this.worldMouseY - size);
+            this.ctx.lineTo(this.worldMouseX + size, this.worldMouseY + size);
+            this.ctx.moveTo(this.worldMouseX + size, this.worldMouseY - size);
+            this.ctx.lineTo(this.worldMouseX - size, this.worldMouseY + size);
+            this.ctx.stroke();
+        }
+
+        // Nome spell
+        this.ctx.fillStyle = isInRange ? '#ff6400' : '#ff6666';
+        this.ctx.font = 'bold 10px Arial';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'bottom';
+        this.ctx.fillText(spell.name, this.worldMouseX, this.worldMouseY - 20);
+    }
+
     // ========================================
     // RENDER FRECCIA DIREZIONALE EVOCAZIONE
     // Mostra la direzione verso cui si muoverà la creatura
@@ -725,7 +880,34 @@ class Game {
         }
         return null;
     }
-    
+
+    // ========================================
+    // TROVA STRUTTURA (torre o muro) ALLA POSIZIONE
+    // ========================================
+    getStructureAt(x, y) {
+        for (const structure of this.structures) {
+            if (!structure.isAlive()) continue;
+            const dist = Utils.distance(x, y, structure.x, structure.y);
+            if (dist <= structure.radius + 10) {
+                return structure;
+            }
+        }
+        return null;
+    }
+
+    // ========================================
+    // TROVA STRUTTURA ALLA CELLA
+    // ========================================
+    getStructureAtCell(col, row) {
+        for (const structure of this.structures) {
+            if (!structure.isAlive()) continue;
+            if (structure.col === col && structure.row === row) {
+                return structure;
+            }
+        }
+        return null;
+    }
+
     // UI
     updateUI() {
         if (!this.mage) return;
@@ -805,6 +987,15 @@ class Game {
         const scaleX = minimapWidth / worldWidth;
         const scaleY = minimapHeight / worldHeight;
 
+        // Salva bounds per interattività
+        this.minimapBounds = {
+            x, y,
+            width: minimapWidth,
+            height: minimapHeight,
+            scaleX, scaleY,
+            worldWidth, worldHeight
+        };
+
         // Sfondo semi-trasparente
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(x - 2, y - 2, minimapWidth + 4, minimapHeight + 4);
@@ -878,5 +1069,33 @@ class Game {
             this.viewportWidth * scaleX,
             this.viewportHeight * scaleY
         );
+    }
+
+    // ========================================
+    // CLICK SULLA MINIMAPPA
+    // Restituisce true se il click è stato gestito
+    // ========================================
+    handleMinimapClick(screenX, screenY) {
+        if (!this.minimapBounds) return false;
+
+        const bounds = this.minimapBounds;
+
+        // Verifica se il click è dentro la minimappa
+        if (screenX < bounds.x || screenX > bounds.x + bounds.width ||
+            screenY < bounds.y || screenY > bounds.y + bounds.height) {
+            return false;
+        }
+
+        // Calcola la posizione nel mondo
+        const relX = screenX - bounds.x;
+        const relY = screenY - bounds.y;
+
+        const worldX = relX / bounds.scaleX;
+        const worldY = relY / bounds.scaleY;
+
+        // Centra la camera su quel punto
+        this.camera.centerOn(worldX, worldY);
+
+        return true;
     }
 }

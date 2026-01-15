@@ -111,31 +111,81 @@ const CreatureTypes = {
     }
 };
 
-// Definizione Torri difensive
-const TowerTypes = {
+// Definizione Strutture difensive (torri e mura)
+const StructureTypes = {
+    // ========================================
+    // TORRI - Strutture con attacco ranged
+    // ========================================
     GUARD_TOWER: {
         name: 'Torre di Guardia',
         hp: 100,
-        damage: 10,
-        attackSpeed: 1.0,   // colpi/secondo
-        range: 4,           // celle
-        targetingLogic: 'PROXIMITY',  // Attacca il più vicino
+        rangedDamage: 10,       // Danno proiettili
+        meleeDamage: 0,         // Nessun danno melee
+        attackSpeed: 1.0,       // colpi/secondo (ranged)
+        meleeAttackSpeed: 0,    // Nessun attacco melee
+        range: 4,               // celle
+        targetingLogic: 'PROXIMITY',
         projectileSpeed: 300,
         color: '#c0392b',
-        attackColor: '#e74c3c'
+        attackColor: '#e74c3c',
+        isWall: false
     },
     BALLISTA: {
         name: 'Balista',
         hp: 150,
-        damage: 50,
-        attackSpeed: 0.2,   // Un colpo ogni 5 secondi
+        rangedDamage: 50,
+        meleeDamage: 0,
+        attackSpeed: 0.2,       // Un colpo ogni 5 secondi
+        meleeAttackSpeed: 0,
         range: 6,
-        targetingLogic: 'HIGH_VALUE', // Attacca il più costoso
+        targetingLogic: 'HIGH_VALUE',
         projectileSpeed: 400,
         color: '#2c3e50',
-        attackColor: '#34495e'
+        attackColor: '#34495e',
+        isWall: false
+    },
+    // ========================================
+    // MURA - Strutture difensive passive
+    // ========================================
+    WALL: {
+        name: 'Muro',
+        hp: 50,
+        rangedDamage: 0,
+        meleeDamage: 0,
+        attackSpeed: 0,
+        meleeAttackSpeed: 0,
+        range: 0,
+        targetingLogic: null,
+        projectileSpeed: 0,
+        color: '#555555',
+        attackColor: null,
+        isWall: true
+    },
+    // ========================================
+    // MURA PRESIDIATE - Strutture difensive attive
+    // HP molto più alti, attacco più basso delle torri
+    // Attacco ranged (arcieri) + melee (olio bollente)
+    // ========================================
+    GARRISONED_WALL: {
+        name: 'Muro Presidiato',
+        hp: 200,                // HP molto più alti
+        rangedDamage: 5,        // Arcieri - danno basso
+        meleeDamage: 15,        // Olio bollente - danno più alto a creature vicine
+        attackSpeed: 0.8,       // Arcieri sparano leggermente più lenti
+        meleeAttackSpeed: 0.5,  // Olio ogni 2 secondi
+        range: 3,               // Range più corto delle torri
+        meleeRange: 1,          // Range melee: 1 cella
+        targetingLogic: 'PROXIMITY',
+        projectileSpeed: 250,
+        color: '#666666',
+        attackColor: '#888888',
+        meleeColor: '#ff8c00',  // Arancione per olio bollente
+        isWall: true
     }
 };
+
+// Alias per retrocompatibilità
+const TowerTypes = StructureTypes;
 
 // Definizione Incantesimi
 const SpellTypes = {

@@ -371,6 +371,21 @@ class Creature extends Entity {
         // ignorando gli ostacoli (può bloccarsi contro i muri)
         // ========================================
         this.useDirectMovement = false;
+
+        // ========================================
+        // TIPO DI ORDINE CORRENTE
+        // MOVE: muove e reagisce se attaccata
+        // ATTACK_MOVE: muove e attacca nemici sul percorso
+        // FORCED_MOVE: ignora tutto fino a destinazione
+        // ========================================
+        this.orderType = null;  // OrderType.MOVE, ATTACK_MOVE, FORCED_MOVE
+
+        // ========================================
+        // FLAG FUGA INTELLIGENTE
+        // Se true, la creatura sta cercando di fuggire da una minaccia
+        // ========================================
+        this.isFleeing = false;
+        this.fleeFromStructure = null;
     }
     
     // ========================================
@@ -432,40 +447,68 @@ class Creature extends Entity {
             case EntityState.IDLE:
                 // ------------------------------
                 // COMPORTAMENTO IDLE:
-                // Se ignoreTowers è false e viene attaccata, reagisce
-                // cercando un bersaglio tra le torri che la stanno attaccando.
-                // Se ignoreTowers è true o non viene attaccata, resta ferma.
+                // Se ignoreTowers è false e viene attaccata, reagisce.
+                // Creature intelligenti: se non possono raggiungere, fuggono.
                 // ------------------------------
                 if (!this.ignoreTowers && this.attackedBy.length > 0) {
-                    // Siamo sotto attacco! Reagisci!
-                    this.reactToAttack(towers, gameMap, pathfinder);
+                    const primaryAttacker = this.attackedBy.find(t => t.isAlive());
+                    if (primaryAttacker) {
+                        // Creature intelligenti: verifica raggiungibilità
+                        if (this.intelligence >= 0.5) {
+                            const canReach = this.canReachStructure(primaryAttacker, gameMap, pathfinder);
+                            if (!canReach) {
+                                // Non può raggiungere: fugge!
+                                this.fleeFrom(primaryAttacker, gameMap, pathfinder);
+                                break;
+                            }
+                        }
+                        // Può raggiungere o è poco intelligente: contrattacca
+                        this.reactToAttack(towers, gameMap, pathfinder);
+                    }
                 }
-                // Altrimenti resta in IDLE
                 break;
 
             case EntityState.MOVING:
                 // Segue il percorso calcolato
                 this.followPath(dt, gameMap);
 
-                // Se ignoreTowers è false, gestisce target e reazione agli attacchi
-                if (!this.ignoreTowers) {
-                    // Se ha già un target valido assegnato, prosegue verso di esso
-                    if (this.target && this.target.isAlive()) {
-                        // Verifica se siamo arrivati al target
-                        this.checkTargetReached();
-                    } else {
-                        // Non ha un target: reagisce solo se viene attaccata
-                        if (this.attackedBy.length > 0) {
-                            this.reactToAttack(towers, gameMap, pathfinder);
-                            this.moveTargetPoint = null;
-                            break;
+                // Comportamento basato sul tipo di ordine
+                if (this.orderType === OrderType.FORCED_MOVE) {
+                    // FORCED_MOVE: ignora tutto, prosegui
+                    this.checkMoveTargetReached();
+                }
+                else if (this.orderType === OrderType.ATTACK_MOVE) {
+                    // ATTACK_MOVE: cerca nemici nel raggio di vista
+                    const visibleTarget = this.findTargetInSight(towers, walls);
+                    if (visibleTarget) {
+                        this.target = visibleTarget;
+                        this.state = EntityState.ATTACKING;
+                        this.orderType = null;
+                        GameLog.log(`${this.name} ingaggia ${visibleTarget.name}`);
+                        break;
+                    }
+                    // Altrimenti continua verso destinazione
+                    this.checkMoveTargetReached();
+                }
+                else {
+                    // MOVE o ordine normale: gestisce target e reazione agli attacchi
+                    if (!this.ignoreTowers) {
+                        // Se ha già un target valido assegnato, prosegue verso di esso
+                        if (this.target && this.target.isAlive()) {
+                            this.checkTargetReached();
+                        } else {
+                            // Non ha un target: reagisce solo se viene attaccata
+                            if (this.attackedBy.length > 0) {
+                                this.handleAttackWhileMoving(towers, walls, gameMap, pathfinder);
+                                break;
+                            }
                         }
                     }
-                }
 
-                // Verifica se siamo arrivati alla destinazione (per movimento generico)
-                if (!this.target) {
-                    this.checkMoveTargetReached();
+                    // Verifica se siamo arrivati alla destinazione
+                    if (!this.target) {
+                        this.checkMoveTargetReached();
+                    }
                 }
                 break;
 
@@ -715,6 +758,118 @@ class Creature extends Entity {
             this.state = EntityState.IDLE;
             this.moveTargetPoint = null;
         }
+    }
+
+    // ========================================
+    // IMPOSTA ORDINE DI MOVIMENTO (nuovo sistema)
+    // orderType: MOVE, ATTACK_MOVE, FORCED_MOVE
+    // ========================================
+    setMoveOrder(targetX, targetY, orderType, gameMap, pathfinder) {
+        this.target = null;
+        this.moveDirection = null;
+        this.moveTargetPoint = { x: targetX, y: targetY };
+        this.orderType = orderType;
+        this.isFleeing = false;
+        this.fleeFromStructure = null;
+
+        // Configura in base al tipo di ordine
+        switch (orderType) {
+            case OrderType.MOVE:
+                // Movimento normale: reagisce se attaccata
+                this.ignoreTowers = false;
+                break;
+
+            case OrderType.ATTACK_MOVE:
+                // Attack-move: cerca attivamente nemici sul percorso
+                this.ignoreTowers = false;
+                break;
+
+            case OrderType.FORCED_MOVE:
+                // Forced move: ignora tutto
+                this.ignoreTowers = true;
+                break;
+        }
+
+        // Calcola il percorso
+        const success = this.moveTo(targetX, targetY, gameMap, pathfinder);
+
+        if (success) {
+            this.state = EntityState.MOVING;
+        } else {
+            this.state = EntityState.IDLE;
+            this.moveTargetPoint = null;
+            this.orderType = null;
+        }
+    }
+
+    // ========================================
+    // IMPOSTA BERSAGLIO DA ATTACCARE
+    // Alias per setDirectTarget con log migliorato
+    // ========================================
+    setAttackTarget(target, gameMap, pathfinder) {
+        this.orderType = null;  // L'ordine diventa attacco
+        this.isFleeing = false;
+        this.fleeFromStructure = null;
+        this.setDirectTarget(target, gameMap, pathfinder);
+    }
+
+    // ========================================
+    // FUGA INTELLIGENTE
+    // Usata quando una creatura intelligente viene attaccata
+    // da una struttura non raggiungibile
+    // ========================================
+    fleeFrom(structure, gameMap, pathfinder) {
+        this.isFleeing = true;
+        this.fleeFromStructure = structure;
+
+        // Calcola direzione opposta alla struttura
+        const dx = this.x - structure.x;
+        const dy = this.y - structure.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist === 0) return;
+
+        // Normalizza
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        // Calcola punto di fuga (fuori dal range della struttura)
+        const fleeDistance = (structure.range || 4) * CONFIG.TILE_SIZE + 100;
+        const fleeX = this.x + nx * fleeDistance;
+        const fleeY = this.y + ny * fleeDistance;
+
+        // Clamp ai bordi della mappa
+        const mapWidth = gameMap.width * CONFIG.TILE_SIZE;
+        const mapHeight = gameMap.height * CONFIG.TILE_SIZE;
+        const targetX = Utils.clamp(fleeX, 20, mapWidth - 20);
+        const targetY = Utils.clamp(fleeY, 20, mapHeight - 20);
+
+        // Calcola percorso di fuga
+        const success = this.moveTo(targetX, targetY, gameMap, pathfinder);
+
+        if (success) {
+            this.state = EntityState.MOVING;
+            this.ignoreTowers = true;  // Durante la fuga ignora le torri
+            GameLog.log(`${this.name} fugge!`);
+        }
+    }
+
+    // ========================================
+    // VERIFICA SE PUO' RAGGIUNGERE UNA STRUTTURA
+    // Restituisce true se esiste un percorso
+    // ========================================
+    canReachStructure(structure, gameMap, pathfinder) {
+        const startCell = this.getCell();
+        const endCell = structure.getCell();
+
+        // Cerca una cella adiacente raggiungibile
+        const adjacent = this.findAdjacentWalkablePoint(structure, gameMap);
+        if (!adjacent) return false;
+
+        const adjacentCell = Utils.pixelToGrid(adjacent.x, adjacent.y);
+        const path = pathfinder.findPath(startCell, adjacentCell, this.intelligence);
+
+        return path !== null && path.length > 0;
     }
 
     // ========================================
@@ -1190,6 +1345,59 @@ class Creature extends Entity {
                 this.state = EntityState.ATTACKING;
                 this.useDirectMovement = true;
             }
+        }
+    }
+
+    // ========================================
+    // GESTISCE ATTACCO MENTRE IN MOVIMENTO
+    // Per creature intelligenti: se non può raggiungere l'attaccante, fugge
+    // Per creature poco intelligenti: contrattacca direttamente
+    // ========================================
+    handleAttackWhileMoving(towers, walls, gameMap, pathfinder) {
+        const attackers = this.attackedBy.filter(t => t.isAlive());
+        if (attackers.length === 0) return;
+
+        // Ordina per HP * DAMAGE
+        attackers.sort((a, b) => {
+            const scoreA = a.hp * a.damage;
+            const scoreB = b.hp * b.damage;
+            return scoreA - scoreB;
+        });
+
+        const primaryAttacker = attackers[0];
+
+        // Creature poco intelligenti: contrattacco diretto
+        if (this.intelligence < 0.5) {
+            this.target = primaryAttacker;
+            this.moveTargetPoint = null;
+            this.orderType = null;
+            this.state = EntityState.ATTACKING;
+            this.useDirectMovement = true;
+            GameLog.log(`${this.name} contrattacca ${primaryAttacker.name}!`);
+            return;
+        }
+
+        // Creature intelligenti: verifica se può raggiungere l'attaccante
+        const canReach = this.canReachStructure(primaryAttacker, gameMap, pathfinder);
+
+        if (canReach) {
+            // Può raggiungere: contrattacca
+            this.target = primaryAttacker;
+            this.moveTargetPoint = null;
+            this.orderType = null;
+            const success = this.moveTo(primaryAttacker.x, primaryAttacker.y, gameMap, pathfinder);
+            if (success) {
+                this.state = EntityState.MOVING;
+                this.useDirectMovement = false;
+                GameLog.log(`${this.name} contrattacca ${primaryAttacker.name}`);
+            } else {
+                this.state = EntityState.ATTACKING;
+                this.useDirectMovement = true;
+            }
+        } else {
+            // Non può raggiungere: fugge!
+            // Ricalcola percorso evitando la zona pericolosa
+            this.fleeFrom(primaryAttacker, gameMap, pathfinder);
         }
     }
     
