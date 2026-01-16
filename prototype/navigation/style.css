@@ -1,0 +1,131 @@
+:root {
+    --bg-color: #1a1a1a;
+    --panel-bg: #2d2d2d;
+    --text-color: #e0e0e0;
+    --accent-color: #4a90e2;
+    --accent-hover: #357abd;
+    --danger-color: #e74c3c;
+    --success-color: #27ae60;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    /* Prevent scrolling */
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    /* Force full viewport height */
+    width: 100vw;
+}
+
+header {
+    flex: 0 0 auto;
+    /* Don't shrink/grow */
+    background-color: var(--panel-bg);
+    padding: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #404040;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+h1 {
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+#controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+button {
+    background-color: #404040;
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-size: 0.9rem;
+}
+
+button:hover {
+    background-color: #505050;
+}
+
+button.active {
+    background-color: var(--accent-color);
+}
+
+button.primary {
+    background-color: var(--success-color);
+}
+
+button.primary:hover {
+    background-color: #219150;
+}
+
+#btn-clear {
+    background-color: var(--danger-color);
+}
+
+#btn-clear:hover {
+    background-color: #c0392b;
+}
+
+#status {
+    font-size: 0.9rem;
+    color: #888;
+    min-width: 150px;
+    text-align: right;
+}
+
+main {
+    flex: 1 1 auto;
+    /* Grow and shrink */
+    display: flex;
+    padding: 1rem;
+    min-height: 0;
+    /* Crucial for nested scrolling/flex */
+    width: 100%;
+}
+
+#canvas-container {
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    background-color: #222;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    position: relative;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+canvas {
+    display: block;
+    cursor: crosshair;
+    width: 100%;
+    height: 100%;
+}

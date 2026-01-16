@@ -536,12 +536,22 @@ class Creature extends Entity {
     performClearLinePath(dt, gameMap, towers, walls) {
         // Verifica che abbiamo un ostacolo da abbattere
         if (!this.target || !this.target.isAlive()) {
-            // Ostacolo distrutto! Torna al target originale
+            // Ostacolo distrutto! Verifica se ci sono altri ostacoli verso il target originale
             if (this.originalTarget && this.originalTarget.isAlive()) {
-                this.target = this.originalTarget;
-                this.originalTarget = null;
-                this.state = EntityState.ATTACKING;
-                GameLog.log(`${this.name} torna ad attaccare ${this.target.name}`);
+                // Cerca il prossimo ostacolo sulla linea verso il target originale
+                const nextObstacle = this.findNextObstacleTowardTarget(this.originalTarget, gameMap, walls);
+
+                if (nextObstacle) {
+                    // C'è un altro ostacolo! Continua ad abbattere
+                    this.target = nextObstacle;
+                    GameLog.log(`${this.name} abbatte prossimo ostacolo: ${nextObstacle.name}`);
+                } else {
+                    // Nessun ostacolo, torna all'attacco del target originale
+                    this.target = this.originalTarget;
+                    this.originalTarget = null;
+                    this.state = EntityState.ATTACKING;
+                    GameLog.log(`${this.name} torna ad attaccare ${this.target.name}`);
+                }
             } else {
                 // Anche il target originale è morto, cerca nuovo bersaglio
                 this.originalTarget = null;
@@ -565,6 +575,58 @@ class Creature extends Entity {
             // Avvicinati all'ostacolo (movimento diretto, senza pathfinding)
             this.moveDirectlyToward(this.target, dt, gameMap);
         }
+    }
+
+    // ========================================
+    // TROVA IL PROSSIMO OSTACOLO VERSO UN TARGET
+    // Usato in CLEAR_LINE_PATH per verificare se ci sono altri muri
+    // sulla linea verso il target originale
+    // ========================================
+    findNextObstacleTowardTarget(target, gameMap, walls) {
+        // Calcola direzione verso il target
+        const dx = target.x - this.x;
+        const dy = target.y - this.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 1) return null;
+
+        // Normalizza direzione
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        // Controlla le celle lungo la linea verso il target
+        // Facciamo passi di mezza cella per non saltare ostacoli
+        const stepSize = CONFIG.TILE_SIZE / 2;
+        const maxSteps = Math.ceil(dist / stepSize);
+
+        let lastCheckedCell = null;
+
+        for (let i = 1; i <= maxSteps; i++) {
+            const checkX = this.x + nx * stepSize * i;
+            const checkY = this.y + ny * stepSize * i;
+            const cell = Utils.pixelToGrid(checkX, checkY);
+
+            // Evita di controllare la stessa cella più volte
+            if (lastCheckedCell && lastCheckedCell.col === cell.col && lastCheckedCell.row === cell.row) {
+                continue;
+            }
+            lastCheckedCell = cell;
+
+            // Se la cella non è camminabile, cerca un muro
+            if (!gameMap.isWalkable(cell.col, cell.row)) {
+                const blockingWall = this.findBlockingWall(cell, walls);
+                if (blockingWall) {
+                    return blockingWall;
+                }
+                // Se non c'è un muro ma non è camminabile (es. roccia),
+                // non possiamo procedere - restituisci null e la creatura
+                // tornerà in ATTACKING (potrebbe bloccarsi, ma è un caso limite)
+                return null;
+            }
+        }
+
+        // Nessun ostacolo trovato
+        return null;
     }
 
     // ========================================

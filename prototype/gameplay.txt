@@ -326,3 +326,136 @@ Puoi creare situazioni simili a quelle degli scacchi dove il giocatore è in una
     La scelta definisce lo stile di gioco.
 
 
+Ecco l'analisi completa della FSM attuale delle creature:                     
+                                                                                
+  Stati Attuali                                                                 
+  Stato: IDLE                                                                   
+  Definito in: EntityState                                                      
+  Descrizione: Fermo, in attesa. Reagisce se attaccato                          
+  ────────────────────────────────────────                                      
+  Stato: MOVING                                                                 
+  Definito in: EntityState                                                      
+  Descrizione: Segue un percorso verso una destinazione                         
+  ────────────────────────────────────────                                      
+  Stato: ATTACKING                                                              
+  Definito in: EntityState                                                      
+  Descrizione: Attacca un bersaglio (torre/muro)                                
+  ────────────────────────────────────────                                      
+  Stato: LOOKING_FOR_TARGET                                                     
+  Definito in: ⚠️ Stringa                                                       
+  Descrizione: Si muove in una direzione cercando bersagli                      
+  ────────────────────────────────────────                                      
+  Stato: CLEAR_LINE_PATH                                                        
+  Definito in: EntityState                                                      
+  Descrizione: Abbatte ostacoli per raggiungere il target                       
+  ────────────────────────────────────────                                      
+  Stato: DEAD                                                                   
+  Definito in: EntityState                                                      
+  Descrizione: Morto (non usato esplicitamente, usa isAlive())                  
+  ────────────────────────────────────────                                      
+  Stato: CASTING                                                                
+  Definito in: EntityState                                                      
+  Descrizione: Definito ma non usato dalle creature                             
+  Diagramma Transizioni Attuali                                                 
+                                                                                
+                      ┌──────────────────────────────────────┐                  
+                      │                                      │                  
+                      ▼                                      │                  
+      ┌───────────────────────────────┐                      │                  
+      │            IDLE               │                      │                  
+      │  - Reagisce se attaccato      │                      │                  
+      │  - Creature smart: fuggono    │                      │                  
+      │    se non raggiungono         │                      │                  
+      └───────────────────────────────┘                      │                  
+            │                   │                            │                  
+            │ attaccato         │ fuga                       │                  
+            ▼                   ▼                            │                  
+      ┌─────────────┐    ┌─────────────┐                     │                  
+      │  ATTACKING  │◄───│   MOVING    │──────┐              │                  
+      │             │    │             │      │              │                  
+      │ - In range: │    │ - Segue path│      │destinazione  │                  
+      │   attacca   │    │ - ATTACK_   │      │raggiunta     │                  
+      │ - Fuori:    │    │   MOVE cerca│      │              │                  
+      │   avvicina  │    │   nemici    │      │              │                  
+      └─────────────┘    └─────────────┘      │              │                  
+            │                   ▲             │              │                  
+            │ bloccato          │             │              │                  
+            │ (low intel)       │             │              │                  
+            ▼                   │             │              │                  
+      ┌─────────────────────────┴─┐           │              │                  
+      │    CLEAR_LINE_PATH        │           │              │                  
+      │  - Abbatte muro           │           │              │                  
+      │  - Cerca prossimo ostacolo│           │              │                  
+      └───────────────────────────┘           │              │                  
+                                              │              │                  
+      ┌───────────────────────────┐           │              │                  
+      │   LOOKING_FOR_TARGET      │───────────┴──────────────┘                  
+      │  - Movimento direzionale  │   (nessun target trovato)                   
+      │  - Cerca torri in vista   │                                             
+      └───────────────────────────┘                                             
+            │                                                                   
+            │ target trovato                                                    
+            ▼                                                                   
+         ATTACKING                                                              
+                                                                                
+  Problemi Attuali                                                              
+                                                                                
+  1. Inconsistenza: LOOKING_FOR_TARGET è usato come stringa invece che in       
+  EntityState                                                                   
+  2. DEAD non usato: Si usa isAlive() invece dello stato                        
+  3. CASTING inutilizzato: Definito ma mai usato                                
+                                                                                
+  Stati Aggiuntivi Suggeriti                                                    
+                                                                                
+  Per un gioco tower defense/attack, questi stati potrebbero arricchire il      
+  gameplay:                                                                     
+  Stato: FLEEING                                                                
+  Descrizione: Fuga attiva da minaccia                                          
+  Utilità: Distinguere da MOVING normale, comportamento diverso (ignora ordini, 
+    priorità sopravvivenza)                                                     
+  ────────────────────────────────────────                                      
+  Stato: STUNNED                                                                
+  Descrizione: Stordito, non può agire                                          
+  Utilità: Per spell/abilità torri (es. torre elettrica)                        
+  ────────────────────────────────────────                                      
+  Stato: SLOWED                                                                 
+  Descrizione: Rallentato                                                       
+  Utilità: Per effetti di stato (potrebbe essere un modificatore invece)        
+  ────────────────────────────────────────                                      
+  Stato: PURSUING                                                               
+  Descrizione: Insegue un bersaglio mobile                                      
+  Utilità: Se aggiungi nemici mobili o il mago può essere inseguito             
+  ────────────────────────────────────────                                      
+  Stato: RALLYING                                                               
+  Descrizione: Si raggruppa con altre creature                                  
+  Utilità: Formazioni, attacchi coordinati                                      
+  ────────────────────────────────────────                                      
+  Stato: HEALING                                                                
+  Descrizione: Riceve cure                                                      
+  Utilità: Se aggiungi creature healer                                          
+  ────────────────────────────────────────                                      
+  Stato: CHANNELING                                                             
+  Descrizione: Sta eseguendo azione prolungata                                  
+  Utilità: Per abilità speciali delle creature                                  
+  ────────────────────────────────────────                                      
+  Stato: BERSERK                                                                
+  Descrizione: Furia, attacca senza strategia                                   
+  Utilità: Creature che impazziscono a bassa vita                               
+  ────────────────────────────────────────                                      
+  Stato: GUARDING                                                               
+  Descrizione: Difende una posizione/entità                                     
+  Utilità: Creature che proteggono il mago                                      
+  ────────────────────────────────────────                                      
+  Stato: RETREATING                                                             
+  Descrizione: Ritirata ordinata verso punto sicuro                             
+  Utilità: Diverso da FLEEING: controllato dal giocatore                        
+  Suggerimento Implementativo                                                   
+                                                                                
+  Vuoi che implementi alcuni di questi stati? I più utili per il gameplay       
+  attuale sarebbero:                                                            
+                                                                                
+  1. FLEEING - già parzialmente implementato ma mescolato con MOVING            
+  2. STUNNED - semplice da aggiungere, apre possibilità per nuove torri         
+  3. GUARDING - utile per proteggere il mago     
+
+

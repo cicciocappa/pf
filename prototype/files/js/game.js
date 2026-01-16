@@ -361,6 +361,11 @@ class Game {
         if (this.map.width > CONFIG.GRID_WIDTH || this.map.height > CONFIG.GRID_HEIGHT) {
             this.renderMinimap();
         }
+
+        // Pannello debug creatura selezionata
+        if (this.selectedCreature && this.selectedCreature.isAlive()) {
+            this.renderCreatureDebugPanel(this.selectedCreature);
+        }
     }
     
     renderMessage(text, color) {
@@ -552,12 +557,12 @@ class Game {
     renderSummonDirection() {
         const start = this.summonAimStart;
         const end = { x: this.worldMouseX, y: this.worldMouseY };
-        
+
         // Calcola direzione
         const dx = end.x - start.x;
         const dy = end.y - start.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        
+
         // Disegna sempre il punto di spawn (cerchio verde)
         this.ctx.beginPath();
         this.ctx.arc(start.x, start.y, 12, 0, Math.PI * 2);
@@ -566,7 +571,7 @@ class Game {
         this.ctx.strokeStyle = '#00ff88';
         this.ctx.lineWidth = 2;
         this.ctx.stroke();
-        
+
         // Se il drag è troppo corto, mostra solo il punto di spawn con indicatore "IDLE"
         if (dist < 20) {
             this.ctx.fillStyle = '#ffffff';
@@ -576,25 +581,53 @@ class Game {
             this.ctx.fillText('⏸', start.x, start.y);
             return;
         }
-        
+
         // Normalizza
         const nx = dx / dist;
         const ny = dy / dist;
-        
-        // Estendi la linea fino al bordo della mappa
+
+        // Calcola il punto di intersezione con il bordo della mappa
+        // (stesso algoritmo di calculateEdgePoint in entities.js)
         const mapWidth = this.map.width * CONFIG.TILE_SIZE;
         const mapHeight = this.map.height * CONFIG.TILE_SIZE;
-        
-        // Calcola punto finale (bordo mappa)
+        const margin = 10;
+
+        let minT = Infinity;
         let extendedEnd = { x: end.x, y: end.y };
-        const maxExtend = Math.max(mapWidth, mapHeight);
-        extendedEnd.x = start.x + nx * maxExtend;
-        extendedEnd.y = start.y + ny * maxExtend;
-        
-        // Clamp ai bordi
-        extendedEnd.x = Utils.clamp(extendedEnd.x, 10, mapWidth - 10);
-        extendedEnd.y = Utils.clamp(extendedEnd.y, 10, mapHeight - 10);
-        
+
+        // Bordo destro
+        if (nx > 0) {
+            const t = (mapWidth - margin - start.x) / nx;
+            if (t > 0 && t < minT) {
+                minT = t;
+                extendedEnd = { x: start.x + nx * t, y: start.y + ny * t };
+            }
+        }
+        // Bordo sinistro
+        if (nx < 0) {
+            const t = (margin - start.x) / nx;
+            if (t > 0 && t < minT) {
+                minT = t;
+                extendedEnd = { x: start.x + nx * t, y: start.y + ny * t };
+            }
+        }
+        // Bordo inferiore
+        if (ny > 0) {
+            const t = (mapHeight - margin - start.y) / ny;
+            if (t > 0 && t < minT) {
+                minT = t;
+                extendedEnd = { x: start.x + nx * t, y: start.y + ny * t };
+            }
+        }
+        // Bordo superiore
+        if (ny < 0) {
+            const t = (margin - start.y) / ny;
+            if (t > 0 && t < minT) {
+                minT = t;
+                extendedEnd = { x: start.x + nx * t, y: start.y + ny * t };
+            }
+        }
+
         // Disegna linea tratteggiata dal punto di spawn al bordo
         this.ctx.beginPath();
         this.ctx.moveTo(start.x, start.y);
@@ -604,11 +637,11 @@ class Game {
         this.ctx.setLineDash([15, 10]);
         this.ctx.stroke();
         this.ctx.setLineDash([]);
-        
+
         // Freccia alla fine
         const arrowSize = 15;
         const angle = Math.atan2(ny, nx);
-        
+
         this.ctx.beginPath();
         this.ctx.moveTo(extendedEnd.x, extendedEnd.y);
         this.ctx.lineTo(
@@ -623,7 +656,7 @@ class Game {
         this.ctx.strokeStyle = '#00ff88';
         this.ctx.lineWidth = 3;
         this.ctx.stroke();
-        
+
         // Indicatore di direzione sul punto di spawn
         this.ctx.fillStyle = '#ffffff';
         this.ctx.font = 'bold 10px Arial';
@@ -1069,6 +1102,151 @@ class Game {
             this.viewportWidth * scaleX,
             this.viewportHeight * scaleY
         );
+    }
+
+    // ========================================
+    // PANNELLO DEBUG CREATURA SELEZIONATA
+    // Mostra informazioni dettagliate per il debug
+    // ========================================
+    renderCreatureDebugPanel(creature) {
+        const padding = 10;
+        const panelWidth = 220;
+        const lineHeight = 16;
+        const x = padding;
+        const y = padding;
+
+        // Calcola altezza dinamica in base alle info da mostrare
+        let lines = [];
+
+        // Intestazione
+        lines.push({ text: `${creature.name} (${creature.type})`, color: creature.color, bold: true });
+        lines.push({ text: `────────────────────`, color: '#555' });
+
+        // Stato
+        const stateColors = {
+            'IDLE': '#888888',
+            'MOVING': '#00aaff',
+            'ATTACKING': '#ff4444',
+            'LOOKING_FOR_TARGET': '#ffaa00',
+            'CLEAR_LINE_PATH': '#ff00ff',
+            'DEAD': '#333333'
+        };
+        const stateColor = stateColors[creature.state] || '#ffffff';
+        lines.push({ text: `Stato: ${creature.state}`, color: stateColor });
+
+        // HP
+        const hpPercent = (creature.hp / creature.maxHp * 100).toFixed(0);
+        const hpColor = creature.hp > creature.maxHp * 0.5 ? '#2ecc71' :
+                        creature.hp > creature.maxHp * 0.25 ? '#f39c12' : '#e74c3c';
+        lines.push({ text: `HP: ${Math.floor(creature.hp)}/${creature.maxHp} (${hpPercent}%)`, color: hpColor });
+
+        // Scudo
+        if (creature.shield > 0) {
+            lines.push({ text: `Scudo: ${Math.floor(creature.shield)}`, color: '#00bfff' });
+        }
+
+        // Separatore
+        lines.push({ text: `────────────────────`, color: '#555' });
+
+        // Target
+        if (creature.target && creature.target.isAlive && creature.target.isAlive()) {
+            const targetDist = Math.floor(Utils.entityDistance(creature, creature.target));
+            lines.push({ text: `Target: ${creature.target.name}`, color: '#ff6666' });
+            lines.push({ text: `  Distanza: ${targetDist}px`, color: '#aaaaaa' });
+            lines.push({ text: `  HP: ${Math.floor(creature.target.hp)}/${creature.target.maxHp}`, color: '#aaaaaa' });
+        } else {
+            lines.push({ text: `Target: nessuno`, color: '#666666' });
+        }
+
+        // Original target (per CLEAR_LINE_PATH)
+        if (creature.originalTarget && creature.originalTarget.isAlive && creature.originalTarget.isAlive()) {
+            lines.push({ text: `Target orig.: ${creature.originalTarget.name}`, color: '#ff9999' });
+        }
+
+        // Tipo di ordine
+        if (creature.orderType) {
+            const orderColors = {
+                'MOVE': '#00aaff',
+                'ATTACK_MOVE': '#ffaa00',
+                'FORCED_MOVE': '#ff00ff'
+            };
+            lines.push({ text: `Ordine: ${creature.orderType}`, color: orderColors[creature.orderType] || '#ffffff' });
+        }
+
+        // Destinazione
+        if (creature.moveTargetPoint) {
+            lines.push({ text: `Destinazione: (${Math.floor(creature.moveTargetPoint.x)}, ${Math.floor(creature.moveTargetPoint.y)})`, color: '#00aaff' });
+        }
+
+        // Direzione di movimento
+        if (creature.moveDirection) {
+            const angle = Math.atan2(creature.moveDirection.y, creature.moveDirection.x) * 180 / Math.PI;
+            lines.push({ text: `Direzione: ${angle.toFixed(0)}°`, color: '#00ff88' });
+        }
+
+        // Separatore
+        lines.push({ text: `────────────────────`, color: '#555' });
+
+        // Flag
+        let flags = [];
+        if (creature.ignoreTowers) flags.push('ignoreTowers');
+        if (creature.isFleeing) flags.push('isFleeing');
+        if (creature.useDirectMovement) flags.push('directMove');
+        if (flags.length > 0) {
+            lines.push({ text: `Flag: ${flags.join(', ')}`, color: '#ffaa00' });
+        }
+
+        // Attaccanti
+        const attackers = creature.attackedBy.filter(t => t.isAlive());
+        if (attackers.length > 0) {
+            lines.push({ text: `Attaccato da: ${attackers.length}`, color: '#ff4444' });
+            for (const attacker of attackers.slice(0, 3)) {
+                lines.push({ text: `  - ${attacker.name}`, color: '#ff6666' });
+            }
+            if (attackers.length > 3) {
+                lines.push({ text: `  ... e altri ${attackers.length - 3}`, color: '#ff6666' });
+            }
+        }
+
+        // Path info
+        if (creature.path && creature.path.length > 0) {
+            const remaining = creature.path.length - creature.pathIndex;
+            lines.push({ text: `Path: ${remaining} celle rimaste`, color: '#aaaaaa' });
+        }
+
+        // Statistiche
+        lines.push({ text: `────────────────────`, color: '#555' });
+        lines.push({ text: `Danni: ${creature.damage} | AS: ${creature.attackSpeed}/s`, color: '#aaaaaa' });
+        lines.push({ text: `Velocità: ${creature.speed} | Int: ${creature.intelligence}`, color: '#aaaaaa' });
+        lines.push({ text: `Sight: ${creature.sightRange}px`, color: '#aaaaaa' });
+
+        // Calcola altezza pannello
+        const panelHeight = lines.length * lineHeight + padding * 2;
+
+        // Sfondo semi-trasparente
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+        this.ctx.fillRect(x, y, panelWidth, panelHeight);
+
+        // Bordo
+        this.ctx.strokeStyle = creature.color;
+        this.ctx.lineWidth = 2;
+        this.ctx.strokeRect(x, y, panelWidth, panelHeight);
+
+        // Testo
+        this.ctx.font = '12px monospace';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'top';
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.bold) {
+                this.ctx.font = 'bold 13px monospace';
+            } else {
+                this.ctx.font = '12px monospace';
+            }
+            this.ctx.fillStyle = line.color;
+            this.ctx.fillText(line.text, x + padding, y + padding + i * lineHeight);
+        }
     }
 
     // ========================================

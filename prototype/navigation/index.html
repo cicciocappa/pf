@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavMesh Generator</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Poly2Tri for Constrained Delaunay Triangulation -->
+    <script src="https://cdn.jsdelivr.net/npm/poly2tri@1.5.0/dist/poly2tri.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <header>
+            <h1>NavMesh Generator</h1>
+            <div id="controls">
+                <button id="btn-draw-poly" class="active">Draw Outer Map</button>
+                <button id="btn-draw-hole">Draw Obstacle (Hole)</button>
+                <button id="btn-bake" class="primary">Bake NavMesh</button>
+                <button id="btn-clear">Clear All</button>
+                <button id="btn-export">Export JSON</button>
+            </div>
+            <div id="status">Mode: Draw Outer Map</div>
+        </header>
+
+        <main>
+            <div id="canvas-container">
+                <canvas id="editor-canvas"></canvas>
+            </div>
+        </main>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

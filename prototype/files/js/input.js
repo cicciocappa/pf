@@ -4,6 +4,7 @@
 // SCHEMA CONTROLLI:
 // - Click Sinistro: Selezione (unità, strutture, UI)
 // - Click Destro: Azione/Ordine (muovi, attacca, conferma spell)
+// - Click Centrale (drag): Scrolla la mappa
 // - Hotkey Q/W/E: Preparazione evocazioni
 // - Hotkey 1/2: Preparazione incantesimi
 // - A + Click Destro: Attack-Move
@@ -59,6 +60,13 @@ class InputHandler {
         this.isEdgeScrolling = false;
         this.edgeScrollDir = { x: 0, y: 0 };
 
+        // ========================================
+        // CAMERA MIDDLE MOUSE DRAG
+        // ========================================
+        this.isMiddleMouseDragging = false;
+        this.middleMouseDragStart = null;  // Posizione mouse all'inizio del drag
+        this.cameraStartPos = null;        // Posizione camera all'inizio del drag
+
         this.setupEventListeners();
     }
 
@@ -92,10 +100,13 @@ class InputHandler {
         // Mouse Move - aggiorna posizione e edge scrolling
         canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
 
-        // Mouse Leave - ferma edge scrolling
+        // Mouse Leave - ferma edge scrolling e middle drag
         canvas.addEventListener('mouseleave', () => {
             this.isEdgeScrolling = false;
             this.edgeScrollDir = { x: 0, y: 0 };
+            this.isMiddleMouseDragging = false;
+            this.middleMouseDragStart = null;
+            this.cameraStartPos = null;
         });
 
         // Click Sinistro - Selezione
@@ -117,6 +128,18 @@ class InputHandler {
             if (e.button === 2) this.handleRightMouseUp(e);
         });
 
+        // Click Centrale - Camera Drag
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 1) {
+                e.preventDefault();
+                this.handleMiddleMouseDown(e);
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (e.button === 1) this.handleMiddleMouseUp(e);
+        });
+
         // Tastiera
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
         document.addEventListener('keyup', (e) => this.handleKeyUp(e));
@@ -130,6 +153,16 @@ class InputHandler {
     // ========================================
     handleMouseMove(e) {
         const screenCoords = this.getCanvasCoords(e);
+
+        // Middle mouse drag per scrollare la mappa
+        if (this.isMiddleMouseDragging && this.middleMouseDragStart) {
+            const dx = screenCoords.x - this.middleMouseDragStart.x;
+            const dy = screenCoords.y - this.middleMouseDragStart.y;
+            this.game.camera.x = this.cameraStartPos.x - dx;
+            this.game.camera.y = this.cameraStartPos.y - dy;
+            this.game.camera.clampToBounds();
+        }
+
         const worldCoords = this.getWorldCoords(screenCoords.x, screenCoords.y);
 
         // Salva coordinate
@@ -138,8 +171,8 @@ class InputHandler {
         this.game.worldMouseX = worldCoords.x;
         this.game.worldMouseY = worldCoords.y;
 
-        // Edge scrolling (solo se camera non segue mago)
-        if (!this.spacePressed) {
+        // Edge scrolling (solo se camera non segue mago e non in middle drag)
+        if (!this.spacePressed && !this.isMiddleMouseDragging) {
             this.updateEdgeScrolling(screenCoords.x, screenCoords.y);
         }
 
@@ -272,6 +305,22 @@ class InputHandler {
         if (this.isDraggingSummon && this.preparationType === 'SUMMON') {
             this.completeSummon(worldCoords.x, worldCoords.y);
         }
+    }
+
+    // ========================================
+    // CLICK CENTRALE - CAMERA DRAG
+    // ========================================
+    handleMiddleMouseDown(e) {
+        const screenCoords = this.getCanvasCoords(e);
+        this.isMiddleMouseDragging = true;
+        this.middleMouseDragStart = { x: screenCoords.x, y: screenCoords.y };
+        this.cameraStartPos = { x: this.game.camera.x, y: this.game.camera.y };
+    }
+
+    handleMiddleMouseUp(e) {
+        this.isMiddleMouseDragging = false;
+        this.middleMouseDragStart = null;
+        this.cameraStartPos = null;
     }
 
     // ========================================
