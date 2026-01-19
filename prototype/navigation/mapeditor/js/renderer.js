@@ -311,8 +311,9 @@ export class Renderer {
         ctx.stroke();
 
         // Draw center point
+        const center = building.getCenter();
         ctx.beginPath();
-        ctx.arc(building.position.x, building.position.y, 4 / this.editor.camera.zoom, 0, Math.PI * 2);
+        ctx.arc(center.x, center.y, 4 / this.editor.camera.zoom, 0, Math.PI * 2);
         ctx.fillStyle = selected ? this.colors.selected : this.colors.building;
         ctx.fill();
     }
@@ -657,43 +658,21 @@ export class Renderer {
     /**
      * Draw building preview (ghost)
      */
-    drawBuildingPreview(position, rotation, scaleX, scaleY, sides) {
-
-        const vertices = [];
-        const angleStep = (2 * Math.PI) / sides;
-
-        // Se i lati sono 4, aggiungiamo PI/4 (45°) per avere un quadrato dritto e non un rombo
-        // In generale, per avere la base piatta, l'angolo di partenza dovrebbe essere 
-        // regolato in base al numero di lati.
-        const baseOffset = (sides === 4) ? Math.PI / 4 : 0;
-        const startAngle = -Math.PI / 2 + baseOffset;
-
+    drawBuildingPreview(position, rotation, scaleX, scaleY, localVertices) {
         const cosR = Math.cos(rotation);
         const sinR = Math.sin(rotation);
 
-        for (let i = 0; i < sides; i++) {
-            const localAngle = startAngle + i * angleStep;
+        const worldVertices = localVertices.map(v => {
+            let x = v.x * scaleX;
+            let y = v.y * scaleY;
+            return {
+                x: (x * cosR - y * sinR) + position.x,
+                y: (x * sinR + y * cosR) + position.y
+            };
+        });
 
-            // 1. Calcolo vertice sul cerchio unitario (Local Space)
-            let vx = Math.cos(localAngle);
-            let vy = Math.sin(localAngle);
-
-            // 2. SCALA LOCALE: Applichiamo la scala prima della rotazione
-            vx *= scaleX;
-            vy *= scaleY;
-
-            // 3. ROTAZIONE: Ruotiamo il punto già scalato attorno all'origine (0,0)
-            // Formula: x' = x*cos - y*sin, y' = x*sin + y*cos
-            const rotX = vx * cosR - vy * sinR;
-            const rotY = vx * sinR + vy * cosR;
-
-            // 4. TRASLAZIONE + OFFSETS: Portiamo il punto nel World Space
-            vertices.push({ x: position.x + rotX, y: position.y + rotY })
-        }
-
-        this.drawPolygonPreview(vertices, true);
+        this.drawPolygonPreview(worldVertices, true);
     }
-
     /**
  * Disegna l'anteprima del muro durante il disegno
  */

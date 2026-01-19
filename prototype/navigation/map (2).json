@@ -1,5 +1,5 @@
 {
-  "nextId": 3,
+  "nextId": 4,
   "outer": [
     {
       "x": 1084,
@@ -44,6 +44,10 @@
         },
         {
           "x": 401.36586018071887,
+          "y": 314.37504064207286
+        },
+        {
+          "x": 501.7221941002092,
           "y": 427.63413981928113
         },
         {
@@ -68,6 +72,21 @@
       ],
       "thickness": 30,
       "maxSegmentLength": 50
+    },
+    {
+      "id": "wall_3",
+      "points": [
+        {
+          "x": 669,
+          "y": 535
+        },
+        {
+          "x": 451.54402714046404,
+          "y": 371.00459023067697
+        }
+      ],
+      "thickness": 30,
+      "maxSegmentLength": 50
     }
   ],
   "obstacles": [],
@@ -78,6 +97,13 @@
       "wallEnd": "end",
       "targetId": "bldg_1",
       "targetVertexIndex": 0
+    },
+    {
+      "type": "WALL_TO_BUILDING_VERTEX",
+      "wallId": "wall_3",
+      "wallEnd": "end",
+      "targetId": "bldg_1",
+      "targetVertexIndex": 2
     }
   ]
 }

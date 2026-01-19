@@ -33,6 +33,8 @@ export class MapData {
         if (!building.id) building.id = `bldg_${this.nextId++}`;
 
         this.buildings.set(building.id, building);
+        this._needsUpdate = true; // Forza la ricostruzione della cache al prossimo snap/render
+        this.updateAllGeometry(); // Ricalcola subito per sicurezza
     }
 
     /**
@@ -67,6 +69,8 @@ export class MapData {
     addWall(wall) {
         if (!wall.id) wall.id = `wall_${this.nextId++}`;
         this.walls.set(wall.id, wall);
+        this._needsUpdate = true; // Forza la ricostruzione della cache al prossimo snap/render
+        this.updateAllGeometry(); // Ricalcola subito per sicurezza
 
     }
 
@@ -194,27 +198,7 @@ export class MapData {
         return this.outerPoly.length >= 3;
     }
 
-    /**
-     * Clear all data
-     */
-    clear() {
-        // 1. Svuota gli oggetti esistenti senza cambiare il riferimento (più sicuro)
-        console.log(this.walls);
-        this.outerPoly.length = 0;
-        this.buildings.clear();
-        this.walls.clear();
-        this.obstacles.clear();
 
-        // 2. Resetta il contatore degli ID univoci
-        // Fondamentale per evitare che una nuova mappa inizi con ID altissimi
-        this.nextId = 1;
-
-        // 3. Notifica il sistema e resetta la cache
-        // Questo è il metodo che abbiamo aggiunto per l'Undo e il Caching
-        this._triggerChange();
-
-        console.log("Mappa resettata correttamente.");
-    }
 
     getAllVertices() {
         if (this._needsUpdate) {
@@ -245,10 +229,10 @@ export class MapData {
                     edge: { p1: edge.p1, p2: edge.p2 },
                     type: edge.type,         // 'building', 'wall', etc.
                     targetId: edge.ownerId,
-                    edgeIndex: edge.index, // <--- Recuperiamo l'indice dalla cache
+                    targetEdgeId: edge.edgeId, // <--- Usiamo l'ID!
                     distance: Math.sqrt(result.distSq)
                 };
-                console.log(nearest);
+                
             }
         }
         return nearest;
@@ -311,6 +295,45 @@ export class MapData {
         return nearest;
     }
 
+    findObjectsInRect(x1, y1, x2, y2) {
+        const results = [];
+
+        // Controlla edifici (usando la posizione o i vertici)
+        this.buildings.forEach(b => {
+            if (b.position.x >= x1 && b.position.x <= x2 && b.position.y >= y1 && b.position.y <= y2) {
+                results.push(b);
+            }
+        });
+
+        // Controlla muri (se almeno un punto è nel rettangolo)
+        this.walls.forEach(w => {
+            const isInside = w.points.some(p => p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2);
+            if (isInside) results.push(w);
+        });
+
+        return results;
+    }
+
+
+    findBuildingAt(x, y) {
+        // Ritorna il primo edificio che contiene il punto (x,y)
+        // Usa un semplice algoritmo di Point-in-Polygon
+        for (const b of this.buildings.values()) {
+            if (this._isPointInPoly({ x, y }, b.vertices)) return b;
+        }
+        return null;
+    }
+
+    findWallVertexAt(x, y, threshold) {
+        for (const w of this.walls.values()) {
+            for (let i = 0; i < w.points.length; i++) {
+                const p = w.points[i];
+                const dist = Math.hypot(p.x - x, p.y - y);
+                if (dist < threshold) return { wall: w, index: i };
+            }
+        }
+        return null;
+    }
 
     /**
      * Serialize to JSON  
@@ -319,10 +342,12 @@ export class MapData {
         return {
             nextId: this.nextId,
             outer: this.outerPoly.map(p => ({ x: p.x, y: p.y })),
-            // Convertiamo le Map in Array di oggetti JSON
+            // Convertiamo le Map in Array
             buildings: Array.from(this.buildings.values()).map(b => b.toJSON()),
             walls: Array.from(this.walls.values()).map(w => w.toJSON()),
-            obstacles: Array.from(this.obstacles.values()).map(o => o.toJSON())
+            obstacles: Array.from(this.obstacles.values()).map(o => o.toJSON()),
+            // SALVATAGGIO CONNESSIONI: Cruciale per il ConnectionManager
+            connections: [...this.connections]
         };
     }
 
@@ -330,43 +355,59 @@ export class MapData {
      * Load from JSON
      */
     fromJSON(json) {
-        this.clear(); // Metodo che ora deve fare this.buildings.clear(), etc.
+        this.clear();
 
-
+        // 1. Ripristina ID e Poligono Esterno
+        this.nextId = json.nextId || 1;
         this.outerPoly = (json.outer || []).map(p => ({ x: p.x, y: p.y }));
 
-        // Ripopoliamo le Map
+        // 2. Ripristina Edifici
         (json.buildings || []).forEach(bData => {
             const building = Building.fromJSON(bData);
             this.buildings.set(building.id, building);
         });
 
+        // 3. Ripristina Muri
         (json.walls || []).forEach(wData => {
             const wall = Wall.fromJSON(wData);
             this.walls.set(wall.id, wall);
         });
 
+        // 4. Ripristina Ostacoli
         (json.obstacles || []).forEach(oData => {
             const obstacle = Obstacle.fromJSON(oData);
             this.obstacles.set(obstacle.id, obstacle);
         });
 
-        this.updateAllGeometry();
+        // 5. RIPRISTINA CONNESSIONI
+        this.connections = json.connections ? [...json.connections] : [];
 
+        // 6. RICALCOLO GEOMETRICO
+        // Ora che tutto è in memoria (inclusi i targetId delle connessioni),
+        // possiamo rigenerare gli smussi e le mesh dei muri.
+        this.updateAllGeometry();
     }
 
+    /**
+     * Pulisce completamente i dati della mappa
+     */
+    clear() {
+        this.buildings.clear();
+        this.walls.clear();
+        this.obstacles.clear();
+        this.connections = [];
+        this.outerPoly = [];
+        // 2. Resetta il contatore degli ID univoci
+        // Fondamentale per evitare che una nuova mappa inizi con ID altissimi
+        this.nextId = 1;
+        this._needsUpdate = true;
+    }
     updateAllGeometry() {
-        // 1. Prima aggiorna i vertici degli edifici (necessari per resolveAll)
-        this.buildings.forEach(b => b.updateVertices());
+        this.buildings.forEach(b => b.regenerateBase());
 
-        // 2. Risoluzione: il manager sposta i punti  
-        //    DEVE essere chiamato PRIMA di wall.updateVertices()!
         this.connectionManager.resolveAll();
 
-        // 3. Ora genera la geometria dei muri  
         this.walls.forEach(w => w.updateVertices());
-
-        // 4. Notifica il cambiamento per cache e render
         this._triggerChange();
     }
 
@@ -398,7 +439,7 @@ export class MapData {
                     p2: p2,
                     type: type,
                     ownerId: id,
-                    index: i // <--- Cruciale!
+                    edgeId: p1.edgeId // Memorizziamo l'ID stabile dell'edge
                 });
             }
         };

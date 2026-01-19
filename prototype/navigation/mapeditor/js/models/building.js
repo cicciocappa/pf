@@ -1,96 +1,151 @@
+import { GeometryFactory } from "../factories/geometry-factory.js";
+
 export class Building {
-    constructor(options = {}) {
-        this.id = options.id;
-        this.position = options.position || { x: 0, y: 0 };
-        this.rotation = options.rotation || 0;
-        this.scaleX = options.scaleX || 50;
-        this.scaleY = options.scaleY || 50;
-        this.sides = options.sides || 4;
-
-        // Inizializza offsets se presenti, altrimenti array vuoto
-        this.offsets = options.offsets || Array.from({ length: this.sides }, () => ({ x: 0, y: 0 }));
-
-        // Vertici come cache interna
-        this.vertices = Array.from({ length: this.sides }, () => ({ x: 0, y: 0 }));
-
+    /**
+     * Il costruttore ora accetta un oggetto di dati che può contenere 
+     * o un template+options (per la creazione) o vertici diretti (per il caricamento)
+     */
+    constructor(data = {}) {
+        this.id = data.id;
+        this.templateId = data.templateId || 'ngon_4';
         this.type = 'building';
-        this.updateVertices(); // Primo calcolo
+
+        // Parametri di trasformazione (la "memoria" dell'asset)
+        this.position = data.position || { x: 0, y: 0 };
+        this.rotation = data.rotation || 0;
+        this.scaleX = data.scaleX || 50;
+        this.scaleY = data.scaleY || 50;
+
+        // I vertici "vivi" (possono essere modificati dai manager)
+        this.vertices = data.vertices ? [...data.vertices] : [];
+
+        // Se non abbiamo vertici (nuovo edificio), generiamo la base
+        if (this.vertices.length === 0) {
+            this.regenerateBase();
+        }
     }
 
-    // Nella classe Building
+    /**
+     * Ritorna i vertici locali del template originale
+     */
+    getTemplateVertices() {
+        if (this.templateId.startsWith('ngon_')) {
+            const sides = parseInt(this.templateId.split('_')[1]);
+            return GeometryFactory.createNGon(sides);
+        }
+        return GeometryFactory.getTemplate(this.templateId);
+    }
+
+    /**
+     * Ripristina la geometria alla forma originale dell'asset, 
+     * applicando posizione, scala e rotazione correnti.
+     */
+    regenerateBase() {
+        const localTemplate = this.getTemplateVertices();
+        const cos = Math.cos(this.rotation);
+        const sin = Math.sin(this.rotation);
+
+        // Salviamo i vertici trasformati in un array "base" che non verrà mai toccato dallo splice
+        this.baseVertices = localTemplate.map((v, index) => {
+            let x = v.x * this.scaleX;
+            let y = v.y * this.scaleY;
+            const vertexId = `v_${index}`;
+            return {
+                id: vertexId, // ID STABILE basato sulla posizione nel template
+                edgeId: `e_${vertexId}`,
+                x: (x * cos - y * sin) + this.position.x,
+                y: (x * sin + y * cos) + this.position.y
+            };
+        });
+
+        // Copiamo i baseVertices nei vertices "vivi" su cui lavorerà il manager
+        this.vertices = this.baseVertices.map(v => ({ ...v }));
+    }
+
+    /**
+     * Trasforma i vertici del template in vertici World Space una sola volta
+     */
+    _generateWorldVertices(localVertices, { position, rotation, scaleX, scaleY }) {
+        console.log(localVertices);
+        const cos = Math.cos(rotation);
+        const sin = Math.sin(rotation);
+
+        return localVertices.map(v => {
+            // 1. Scala locale
+            let x = v.x * scaleX;
+            let y = v.y * scaleY;
+            // 2. Rotazione
+            const rx = x * cos - y * sin;
+            const ry = x * sin + y * cos;
+            // 3. Traslazione alla posizione mondo
+            return {
+                x: rx + position.x,
+                y: ry + position.y
+            };
+        });
+    }
+
+    /**
+     * Sposta l'edificio applicando un delta a tutti i vertici espliciti
+     */
+    translate(dx, dy) {
+        this.vertices.forEach(v => {
+            v.x += dx;
+            v.y += dy;
+        });
+    }
+
+    /**
+     * Calcola il centro approssimativo (centroid) basato sui vertici attuali.
+     * Utile per la rotazione o per il posizionamento di etichette.
+     */
+    getCenter() {
+        if (this.vertices.length === 0) return { x: 0, y: 0 };
+        let cx = 0, cy = 0;
+        for (const v of this.vertices) {
+            cx += v.x;
+            cy += v.y;
+        }
+        return { x: cx / this.vertices.length, y: cy / this.vertices.length };
+    }
+
     getVertices() {
         return this.vertices;
     }
 
-    updateVertices() {
-        this._adjustArrays();
-        const angleStep = (2 * Math.PI) / this.sides;
-
-        // Se i lati sono 4, aggiungiamo PI/4 (45°) per avere un quadrato dritto e non un rombo
-        // In generale, per avere la base piatta, l'angolo di partenza dovrebbe essere 
-        // regolato in base al numero di lati.
-        const baseOffset = (this.sides === 4) ? Math.PI / 4 : 0;
-        const startAngle = -Math.PI / 2 + baseOffset;
-
-        const cosR = Math.cos(this.rotation);
-        const sinR = Math.sin(this.rotation);
-
-        for (let i = 0; i < this.sides; i++) {
-            const localAngle = startAngle + i * angleStep;
-
-            // 1. Calcolo vertice sul cerchio unitario (Local Space)
-            let vx = Math.cos(localAngle);
-            let vy = Math.sin(localAngle);
-
-            // 2. SCALA LOCALE: Applichiamo la scala prima della rotazione
-            vx *= this.scaleX;
-            vy *= this.scaleY;
-
-            // 3. ROTAZIONE: Ruotiamo il punto già scalato attorno all'origine (0,0)
-            // Formula: x' = x*cos - y*sin, y' = x*sin + y*cos
-            const rotX = vx * cosR - vy * sinR;
-            const rotY = vx * sinR + vy * cosR;
-
-            // 4. TRASLAZIONE + OFFSETS: Portiamo il punto nel World Space
-            this.vertices[i].x = this.position.x + rotX + (this.offsets[i]?.x || 0);
-            this.vertices[i].y = this.position.y + rotY + (this.offsets[i]?.y || 0);
-        }
+    getTemplate() {
+        return this.templateId;
     }
 
-    _adjustArrays() {
-        const currentLength = this.offsets.length;
-        const targetLength = this.sides;
-
-        if (currentLength < targetLength) {
-            // --- AGGIUNTA DI LATI ---
-            for (let i = currentLength; i < targetLength; i++) {
-                // Aggiungiamo nuovi offset (inizialmente a zero)
-                this.offsets.push({ x: 0, y: 0 });
-                // Aggiungiamo nuovi vertici (verranno popolati da updateVertices)
-                this.vertices.push({ x: 0, y: 0 });
-            }
-        } else if (currentLength > targetLength) {
-            // --- RIMOZIONE DI LATI ---
-            // Accorciamo gli array. Usare .splice() o .length è indifferente,
-            // ma .length è leggermente più veloce in JS.
-            this.offsets.length = targetLength;
-            this.vertices.length = targetLength;
-        }
+    // Aggiungi questo metodo
+    resetToWorldBase(position, rotation, scaleX, scaleY, template) {
+        // Rigenera i vertici World Space "puliti" partendo dal template locale
+        this.vertices = this._generateWorldVertices(template.vertices, {
+            position, rotation, scaleX, scaleY
+        });
     }
 
+    /**
+     * Serializzazione: salviamo i vertici espliciti (che potrebbero essere stati smussati)
+     */
     toJSON() {
         return {
             id: this.id,
+            templateId: this.templateId,
             position: { ...this.position },
             rotation: this.rotation,
             scaleX: this.scaleX,
             scaleY: this.scaleY,
-            sides: this.sides,
-            offsets: this.offsets.map(o => ({ ...o })) // Copia profonda per sicurezza
+            // Salviamo anche i vertici attuali (già smussati) per sicurezza
+            vertices: this.vertices.map(v => ({ x: v.x, y: v.y }))
         };
     }
 
     static fromJSON(json) {
+        // Passiamo l'oggetto JSON direttamente al costruttore
+        // Il costruttore userà il percorso "data.vertices"
         return new Building(json);
     }
+
+
 }

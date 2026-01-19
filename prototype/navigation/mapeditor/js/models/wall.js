@@ -5,8 +5,8 @@ export class Wall {
     constructor(options = {}) {
         this.id = options.id;
         this.points = options.points || []; // Vertici della linea centrale {x, y}
-        this.thickness = options.thickness || 10;
-        this.maxSegmentLength = options.maxSegmentLength || 30;
+        this.thickness = options.thickness || 30;
+        this.maxSegmentLength = options.maxSegmentLength || 50;
         this.type = 'wall';
 
         // Cache della geometria finale (array di quadrilateri)
@@ -151,10 +151,22 @@ export class Wall {
         return { x: miterNormal.x * length, y: miterNormal.y * length };
     }
 
+    /**
+     * Genera le unità (quadrilateri) base senza connessioni
+     */
+    generateBaseUnits() {
+        this.units = [];
+        for (let i = 0; i < this.points.length - 1; i++) {
+            // Genera il classico rettangolo [L1, R1, R2, L2] per il segmento
+            const unit = this._createStandardUnit(i);
+            this.units.push(unit);
+        }
+    }
+    /*
     lerpPoint(p1, p2, t) {
         return { x: p1.x + (p2.x - p1.x) * t, y: p1.y + (p2.y - p1.y) * t };
     }
-
+    */
     normalize(v) {
         const l = Math.sqrt(v.x * v.x + v.y * v.y);
         return l < 0.0001 ? { x: 0, y: 0 } : { x: v.x / l, y: v.y / l };
@@ -167,5 +179,17 @@ export class Wall {
             thickness: this.thickness,
             maxSegmentLength: this.maxSegmentLength
         };
+    }
+    /**
+     * Ripristina un'istanza di Wall da un oggetto JSON
+     */
+    static fromJSON(json) {
+        return new Wall({
+            id: json.id,
+            // Cloniamo i punti per evitare riferimenti condivisi indesiderati
+            points: json.points ? json.points.map(p => ({ ...p })) : [],
+            thickness: json.thickness,
+            maxSegmentLength: json.maxSegmentLength
+        });
     }
 }

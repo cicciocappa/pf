@@ -1,143 +1,219 @@
 import { Tool } from './tool.js';
 
-/**
- * SelectTool - For selecting, dragging objects and opening properties
- */
 export class SelectTool extends Tool {
     constructor(editor) {
         super(editor);
         this.name = 'select';
 
         this.isDragging = false;
-        this.dragStart = null;
-        this.dragOffset = null;
-    }
+        this.isMarquee = false;
 
-    activate() {
-        super.activate();
-    }
+        this.dragStartMouse = { x: 0, y: 0 };
+        this.marqueeStart = { x: 0, y: 0 };
+        this.marqueeEnd = { x: 0, y: 0 };
 
-    deactivate() {
-        super.deactivate();
-        this.isDragging = false;
-        this.dragStart = null;
-        this.dragOffset = null;
+        // Usiamo un Set nell'editor per gestire la selezione multipla
+        if (!this.editor.selection) {
+            this.editor.selection = new Set();
+        }
     }
 
     onMouseDown(x, y, event) {
-        if (event.button !== 0) return; // Left button only
+        if (event.button !== 0) return;
 
-        // Find object at click position
         const obj = this.editor.mapData.findObjectAt(x, y);
+        const isShift = event.shiftKey;
 
         if (obj) {
-            this.editor.selectObject(obj);
-            this.isDragging = true;
-            this.dragStart = { x, y };
-
-            // Calculate offset from object center
-            if (obj.type === 'building') {
-                this.dragOffset = {
-                    x: x - obj.position.x,
-                    y: y - obj.position.y
-                };
-            } else if (obj.type === 'wall') {
-                // For walls, calculate center of points
-                const center = this.getWallCenter(obj);
-                this.dragOffset = {
-                    x: x - center.x,
-                    y: y - center.y
-                };
+            // Gestione selezione multipla con Shift
+            if (isShift) {
+                if (this.editor.selection.has(obj)) {
+                    this.editor.selection.delete(obj);
+                } else {
+                    this.editor.selection.add(obj);
+                }
+            } else {
+                // Se clicco su un oggetto non selezionato senza Shift, resetto e seleziono solo questo
+                if (!this.editor.selection.has(obj)) {
+                    this.editor.selection.clear();
+                    this.editor.selection.add(obj);
+                }
             }
+
+            this.isDragging = true;
+            this.dragStartMouse = { x, y };
         } else {
-            this.editor.selectObject(null);
+            // Clic nel vuoto
+            if (!isShift) this.editor.selection.clear();
+
+            this.isMarquee = true;
+            this.marqueeStart = { x, y };
+            this.marqueeEnd = { x, y };
         }
 
         this.editor.render();
     }
 
     onMouseMove(x, y, event) {
-        if (!this.isDragging) return;
+        if (this.isDragging) {
+            const dx = x - this.dragStartMouse.x;
+            const dy = y - this.dragStartMouse.y;
+            this.dragStartMouse = { x, y }; // Aggiorniamo per il prossimo delta
 
-        const obj = this.editor.selectedObject;
-        if (!obj) return;
-
-        let targetX = x - this.dragOffset.x;
-        let targetY = y - this.dragOffset.y;
-
-        // Apply snap if enabled
-        if (this.editor.snapEnabled) {
-            const snapped = this.editor.mapData.findNearestVertex(targetX, targetY, 15 / this.editor.camera.zoom);
-            if (snapped) {
-                targetX = snapped.x;
-                targetY = snapped.y;
-                this.editor.snapPoint = snapped;
-            } else {
-                this.editor.snapPoint = null;
+            // Muoviamo tutti gli oggetti selezionati
+            for (const obj of this.editor.selection) {
+                if (obj.type === 'building') {
+                    obj.position.x += dx;
+                    obj.position.y += dy;
+                } else if (obj.type === 'wall') {
+                    for (const point of obj.points) {
+                        point.x += dx;
+                        point.y += dy;
+                    }
+                }
             }
+
+            // IMPORTANTE: Ricalcoliamo le connessioni (Bevel) durante il drag
+            this.editor.mapData.updateAllGeometry();
         }
 
-        if (obj.type === 'building') {
-            obj.position.x = targetX;
-            obj.position.y = targetY;
-        } else if (obj.type === 'wall') {
-            // Move all wall points
-            const center = this.getWallCenter(obj);
-            const dx = targetX - center.x;
-            const dy = targetY - center.y;
-
-            for (const point of obj.points) {
-                point.x += dx;
-                point.y += dy;
-            }
+        else if (this.isMarquee) {
+            this.marqueeEnd = { x, y };
         }
 
         this.editor.render();
     }
 
     onMouseUp(x, y, event) {
+        if (this.isMarquee) {
+            this._performMarqueeSelection();
+            this.isMarquee = false;
+        }
+
+        if (this.isDragging && this.editor.history) {
+            this.editor.history.save();
+        }
+
         this.isDragging = false;
-        this.dragStart = null;
-        this.dragOffset = null;
-        this.editor.snapPoint = null;
         this.editor.render();
     }
 
-    onDoubleClick(x, y, event) {
-        const obj = this.editor.mapData.findObjectAt(x, y);
-        if (obj) {
-            this.editor.selectObject(obj);
-            this.editor.showPropertiesDialog(obj);
+    _performMarqueeSelection() {
+        const xMin = Math.min(this.marqueeStart.x, this.marqueeEnd.x);
+        const xMax = Math.max(this.marqueeStart.x, this.marqueeEnd.x);
+        const yMin = Math.min(this.marqueeStart.y, this.marqueeEnd.y);
+        const yMax = Math.max(this.marqueeStart.y, this.marqueeEnd.y);
+
+        const found = this.editor.mapData.findObjectsInRect(xMin, yMin, xMax, yMax);
+        found.forEach(obj => this.editor.selection.add(obj));
+    }
+
+    draw(ctx) {
+        if (this.isMarquee) {
+            ctx.strokeStyle = '#0078d7';
+            ctx.fillStyle = 'rgba(0, 120, 215, 0.2)';
+            const w = this.marqueeEnd.x - this.marqueeStart.x;
+            const h = this.marqueeEnd.y - this.marqueeStart.y;
+            ctx.fillRect(this.marqueeStart.x, this.marqueeStart.y, w, h);
+            ctx.strokeRect(this.marqueeStart.x, this.marqueeStart.y, w, h);
         }
     }
 
     onKeyDown(event) {
         if (event.key === 'Delete' || event.key === 'Backspace') {
-            const obj = this.editor.selectedObject;
-            if (obj && obj.type) {
-                this.editor.mapData.removeObject(obj);
-                this.editor.selectObject(null);
+            if (this.editor.selection.size > 0) {
+                if (this.editor.history) this.editor.history.save();
+
+                this.editor.selection.forEach(obj => {
+                    this.editor.mapData.removeObject(obj);
+                });
+                this.editor.selection.clear();
+                this.editor.mapData.updateAllGeometry();
                 this.editor.render();
             }
+        }
+    }
+
+    // Aggiungi questo metodo al SelectTool
+    onWheel(x, y, deltaY, event) {
+        if (this.editor.selection.size === 0) return;
+
+        // Usiamo Shift + Wheel per la rotazione di gruppo
+        if (event.shiftKey) {
+            const angle = (deltaY > 0 ? -15 : 15) * Math.PI / 180;
+            const center = this._getSelectionCenter();
+
+            if (this.editor.history) this.editor.history.save();
+
+            for (const obj of this.editor.selection) {
+                this._rotateObject(obj, center, angle);
+            }
+
+            this.editor.mapData.updateAllGeometry();
+            this.editor.render();
             event.preventDefault();
         }
     }
 
-    getWallCenter(wall) {
-        if (wall.points.length === 0) return { x: 0, y: 0 };
+    /**
+     * Calcola il centro geometrico di tutti gli oggetti selezionati
+     */
+    _getSelectionCenter() {
+        let sumX = 0, sumY = 0, count = 0;
 
-        let sumX = 0, sumY = 0;
-        for (const p of wall.points) {
-            sumX += p.x;
-            sumY += p.y;
+        for (const obj of this.editor.selection) {
+            if (obj.type === 'building') {
+                sumX += obj.position.x;
+                sumY += obj.position.y;
+                count++;
+            } else if (obj.type === 'wall') {
+                for (const p of obj.points) {
+                    sumX += p.x;
+                    sumY += p.y;
+                    count++;
+                }
+            }
         }
 
-        return {
-            x: sumX / wall.points.length,
-            y: sumY / wall.points.length
-        };
+        return count > 0 ? { x: sumX / count, y: sumY / count } : { x: 0, y: 0 };
     }
 
+    /**
+     * Ruota un singolo oggetto attorno a un punto arbitrario
+     */
+    _rotateObject(obj, center, angle) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+
+        const rotatePoint = (p) => {
+            const dx = p.x - center.x;
+            const dy = p.y - center.y;
+            return {
+                x: center.x + (dx * cos - dy * sin),
+                y: center.y + (dx * sin + dy * cos)
+            };
+        };
+
+        if (obj.type === 'building') {
+            // 1. Ruota la posizione dell'edificio attorno al centro comune
+            const newPos = rotatePoint(obj.position);
+            obj.position.x = newPos.x;
+            obj.position.y = newPos.y;
+
+            // 2. Ruota l'edificio su se stesso
+            obj.rotation += angle;
+        }
+        else if (obj.type === 'wall') {
+            // Ruota ogni punto del muro attorno al centro comune
+            for (const p of obj.points) {
+                const newP = rotatePoint(p);
+                p.x = newP.x;
+                p.y = newP.y;
+            }
+        }
+    }
+
+    // ... getStatusText() aggiornato per mostrare il numero di oggetti selezionati
     getStatusText() {
         if (this.editor.selectedObject) {
             const obj = this.editor.selectedObject;

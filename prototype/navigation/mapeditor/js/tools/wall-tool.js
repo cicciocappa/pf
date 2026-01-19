@@ -47,6 +47,7 @@ export class WallTool extends Tool {
         if (event.button === 0) {
             // Left click - add point
             const snapResult = this.getSnappedPoint(x, y);
+           
             const point = snapResult.point;
 
             // If this is the first point, store start snap info
@@ -57,6 +58,7 @@ export class WallTool extends Tool {
                         type: snapResult.vertexSnap.type,
                         targetId: snapResult.vertexSnap.targetId,
                         vertexIndex: snapResult.vertexSnap.vertexIndex,
+                        targetVertexId: snapResult.vertexSnap.point.id,
                         vertex: { ...snapResult.vertexSnap.point },
                         snapType: 'vertex'
                     };
@@ -74,6 +76,7 @@ export class WallTool extends Tool {
                             p2: { ...snapResult.edgeSnap.edge.p2 }
                         },
                         edgeIndex: snapResult.edgeSnap.edgeIndex,
+                        targetEdgeId: snapResult.edgeSnap.targetEdgeId,
                         snapType: 'edge'
                     };
                 } else {
@@ -89,6 +92,7 @@ export class WallTool extends Tool {
                     type: snapResult.vertexSnap.type,
                     targetId: snapResult.vertexSnap.targetId,
                     vertexIndex: snapResult.vertexSnap.vertexIndex,
+                    targetVertexId: snapResult.vertexSnap.point.id,
                     vertex: { ...snapResult.vertexSnap.point },
                     snapType: 'vertex'
                 };
@@ -104,6 +108,7 @@ export class WallTool extends Tool {
                         p2: { ...snapResult.edgeSnap.edge.p2 }
                     },
                     edgeIndex: snapResult.edgeSnap.edgeIndex,
+                    targetEdgeId: snapResult.edgeSnap.targetEdgeId,
                     snapType: 'edge'
                 };
             } else {
@@ -152,6 +157,7 @@ export class WallTool extends Tool {
         if (this.editor.snapEnabled) {
             const snapped = this.editor.mapData.findNearestVertex(x, y, threshold);
             if (snapped) {
+                //console.log(snapped);
                 point = { ...snapped.point };
                 vertexSnap = snapped;
             }
@@ -160,9 +166,11 @@ export class WallTool extends Tool {
         // If no vertex snap, try edge snap
         if (!vertexSnap && this.editor.snapToEdgeEnabled) {
             const edgeResult = this.editor.mapData.findNearestEdge(x, y, threshold);
+            
             if (edgeResult) {
                 point = { ...edgeResult.point };
                 edgeSnap = edgeResult;
+                
             }
         }
 
@@ -234,9 +242,7 @@ export class WallTool extends Tool {
             // 3. Aggiunta alla mappa
             this.editor.mapData.addWall(wall);
 
-            // 4. Registrazione delle connessioni nel ConnectionManager
-            const connManager = this.editor.mapData.connectionManager;
-
+           
             if (this.startSnapInfo) {
                 this.registerConnection(wall.id, 'start', this.startSnapInfo);
             }
@@ -301,8 +307,10 @@ export class WallTool extends Tool {
                 targetId: snapInfo.targetId,
                 // Dati extra a seconda del tipo
                 targetVertexIndex: snapInfo.vertexIndex,
+                targetVertexId: snapInfo.targetVertexId,
                 targetEdge: snapInfo.edge,
-                targetEdgeIndex: snapInfo.edgeIndex
+                targetEdgeIndex: snapInfo.edgeIndex,
+                targetEdgeId: snapInfo.targetEdgeId
             });
         }
     }
