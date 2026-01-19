@@ -245,8 +245,10 @@ export class MapData {
                     edge: { p1: edge.p1, p2: edge.p2 },
                     type: edge.type,         // 'building', 'wall', etc.
                     targetId: edge.ownerId,
+                    edgeIndex: edge.index, // <--- Recuperiamo l'indice dalla cache
                     distance: Math.sqrt(result.distSq)
                 };
+                console.log(nearest);
             }
         }
         return nearest;
@@ -354,14 +356,17 @@ export class MapData {
     }
 
     updateAllGeometry() {
-        // 1. Reset: ogni oggetto ricalcola la sua geometria base
+        // 1. Prima aggiorna i vertici degli edifici (necessari per resolveAll)
         this.buildings.forEach(b => b.updateVertices());
-        this.walls.forEach(w => w.updateVertices());
 
-        // 2. Risoluzione: il manager modifica i vertici in base alle connessioni
+        // 2. Risoluzione: il manager sposta i punti  
+        //    DEVE essere chiamato PRIMA di wall.updateVertices()!
         this.connectionManager.resolveAll();
 
-        // 3. Notifica il cambiamento per cache e render
+        // 3. Ora genera la geometria dei muri  
+        this.walls.forEach(w => w.updateVertices());
+
+        // 4. Notifica il cambiamento per cache e render
         this._triggerChange();
     }
 
@@ -392,7 +397,8 @@ export class MapData {
                     p1: p1,
                     p2: p2,
                     type: type,
-                    ownerId: id
+                    ownerId: id,
+                    index: i // <--- Cruciale!
                 });
             }
         };

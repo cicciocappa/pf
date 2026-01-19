@@ -23,6 +23,7 @@ export class Building {
     }
 
     updateVertices() {
+        this._adjustArrays();
         const angleStep = (2 * Math.PI) / this.sides;
 
         // Se i lati sono 4, aggiungiamo PI/4 (45°) per avere un quadrato dritto e non un rombo
@@ -57,8 +58,24 @@ export class Building {
     }
 
     _adjustArrays() {
-        // Logica per aggiungere o rimuovere elementi da offsets/vertices
-        // mantenendo quelli esistenti se possibile
+        const currentLength = this.offsets.length;
+        const targetLength = this.sides;
+
+        if (currentLength < targetLength) {
+            // --- AGGIUNTA DI LATI ---
+            for (let i = currentLength; i < targetLength; i++) {
+                // Aggiungiamo nuovi offset (inizialmente a zero)
+                this.offsets.push({ x: 0, y: 0 });
+                // Aggiungiamo nuovi vertici (verranno popolati da updateVertices)
+                this.vertices.push({ x: 0, y: 0 });
+            }
+        } else if (currentLength > targetLength) {
+            // --- RIMOZIONE DI LATI ---
+            // Accorciamo gli array. Usare .splice() o .length è indifferente,
+            // ma .length è leggermente più veloce in JS.
+            this.offsets.length = targetLength;
+            this.vertices.length = targetLength;
+        }
     }
 
     toJSON() {

@@ -73,6 +73,7 @@ export class WallTool extends Tool {
                             p1: { ...snapResult.edgeSnap.edge.p1 },
                             p2: { ...snapResult.edgeSnap.edge.p2 }
                         },
+                        edgeIndex: snapResult.edgeSnap.edgeIndex,
                         snapType: 'edge'
                     };
                 } else {
@@ -102,6 +103,7 @@ export class WallTool extends Tool {
                         p1: { ...snapResult.edgeSnap.edge.p1 },
                         p2: { ...snapResult.edgeSnap.edge.p2 }
                     },
+                    edgeIndex: snapResult.edgeSnap.edgeIndex,
                     snapType: 'edge'
                 };
             } else {
@@ -268,6 +270,9 @@ export class WallTool extends Tool {
      * Converte le informazioni di snap del Tool in una connessione formale nel Manager
      */
     registerConnection(wallId, wallEnd, snapInfo) {
+        
+        console.log(wallId, wallEnd, snapInfo);
+        
         const connManager = this.editor.mapData.connectionManager;
         let type = '';
 
@@ -286,6 +291,8 @@ export class WallTool extends Tool {
             }
         }
 
+        console.log("aggiungo", snapInfo);
+
         if (type) {
             connManager.add({
                 type: type,
@@ -294,7 +301,8 @@ export class WallTool extends Tool {
                 targetId: snapInfo.targetId,
                 // Dati extra a seconda del tipo
                 targetVertexIndex: snapInfo.vertexIndex,
-                targetEdge: snapInfo.edge
+                targetEdge: snapInfo.edge,
+                targetEdgeIndex: snapInfo.edgeIndex
             });
         }
     }

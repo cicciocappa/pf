@@ -10,7 +10,7 @@ export class Wall {
         this.type = 'wall';
 
         // Cache della geometria finale (array di quadrilateri)
-        this.units = []; 
+        this.units = [];
     }
 
     /**
@@ -29,67 +29,79 @@ export class Wall {
      * Genera la mesh suddivisa in base a maxSegmentLength.
      * Ogni unità è un array di 4 vertici (quadrilatero).
      */
-generateDestructibleUnits() {
-    const units = [];
-    const halfThickness = this.thickness / 2;
-    
-    // Calcoliamo i punti Miter per ogni vertice (giunzioni)
-    const miterPoints = this.calculateThicknessPoints();
+    generateDestructibleUnits() {
+        const units = [];
+        const halfThickness = this.thickness / 2;
+        const miterPoints = this.calculateThicknessPoints();
 
-    for (let i = 0; i < this.points.length - 1; i++) {
-        const p1 = this.points[i];
-        const p2 = this.points[i + 1];
+        for (let i = 0; i < this.points.length - 1; i++) {
+            const p1 = this.points[i];
+            const p2 = this.points[i + 1];
 
-        const dx = p2.x - p1.x;
-        const dy = p2.y - p1.y;
-        const length = Math.sqrt(dx * dx + dy * dy);
-        
-        if (length < 0.1) continue;
+            // ... (calcolo direzione e lunghezza come prima) ...
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            if (length < 0.1) continue;
 
-        const dir = { x: dx / length, y: dy / length };
-        const normal = { x: -dir.y, y: dir.x };
-        const numSubdivisions = Math.ceil(length / this.maxSegmentLength);
+            const dir = { x: dx / length, y: dy / length };
+            const normal = { x: -dir.y, y: dir.x };
+            const numSubdivisions = Math.ceil(length / this.maxSegmentLength);
 
-        // Helper per ottenere la linea di taglio a una data distanza t [0, 1]
-        const getCutLine = (t, isStartSegment, isEndSegment) => {
-            // Se siamo all'inizio esatto del segmento (t=0)
-            if (t <= 0) {
-                return { L: miterPoints[i].left, R: miterPoints[i].right };
-            }
-            // Se siamo alla fine esatta del segmento (t=1)
-            if (t >= 1) {
-                return { L: miterPoints[i + 1].left, R: miterPoints[i + 1].right };
-            }
-            
-            // Per i tagli interni: linea perpendicolare perfetta
-            const centerPos = { x: p1.x + dx * t, y: p1.y + dy * t };
-            return {
-                L: { x: centerPos.x + normal.x * halfThickness, y: centerPos.y + normal.y * halfThickness },
-                R: { x: centerPos.x - normal.x * halfThickness, y: centerPos.y - normal.y * halfThickness }
+            /**
+             * getCutLine ora riceve informazioni sulla posizione ASSOLUTA nel muro
+             */
+            const getCutLine = (t, isWallStart, isWallEnd) => {
+                // Applica l'override SOLO se siamo all'inizio ASSOLUTO del muro
+                if (t <= 0 && isWallStart && this.startCapOverride) {
+                    return { L: this.startCapOverride.left, R: this.startCapOverride.right };
+                }
+                // Applica l'override SOLO se siamo alla fine ASSOLUTA del muro
+                if (t >= 1 && isWallEnd && this.endCapOverride) {
+                    return { L: this.endCapOverride.left, R: this.endCapOverride.right };
+                }
+
+                // Altrimenti: logica standard per vertici intermedi e tagli perpendicolari
+                if (t <= 0) return { L: miterPoints[i].left, R: miterPoints[i].right };
+                if (t >= 1) return { L: miterPoints[i + 1].left, R: miterPoints[i + 1].right };
+
+                const centerPos = { x: p1.x + dx * t, y: p1.y + dy * t };
+                return {
+                    L: { x: centerPos.x + normal.x * halfThickness, y: centerPos.y + normal.y * halfThickness },
+                    R: { x: centerPos.x - normal.x * halfThickness, y: centerPos.y - normal.y * halfThickness }
+                };
             };
-        };
 
-        for (let j = 0; j < numSubdivisions; j++) {
-            const tStart = j / numSubdivisions;
-            const tEnd = (j + 1) / numSubdivisions;
+            for (let j = 0; j < numSubdivisions; j++) {
+                const tStart = j / numSubdivisions;
+                const tEnd = (j + 1) / numSubdivisions;
 
-            const startLine = getCutLine(tStart, j === 0, false);
-            const endLine = getCutLine(tEnd, false, j === numSubdivisions - 1);
+                // Controlliamo se siamo al primo blocco del primo segmento 
+                // o all'ultimo blocco dell'ultimo segmento
+                const isAtAbsoluteStart = (i === 0 && j === 0);
+                const isAtAbsoluteEnd = (i === this.points.length - 2 && j === numSubdivisions - 1);
 
-            units.push({
-                id: `${this.id}_u${units.length}`,
-                // Ordine vertici: TopLeft, TopRight, BottomRight, BottomLeft
-                vertices: [
-                    { ...startLine.L },
-                    { ...endLine.L },
-                    { ...endLine.R },
-                    { ...startLine.R }
-                ]
-            });
+                // Per l'inizio della suddivisione (tStart)
+                // Passiamo true solo se è l'inizio del primo blocco del primo segmento
+                const startLine = getCutLine(tStart, isAtAbsoluteStart, false);
+
+                // Per la fine della suddivisione (tEnd)
+                // Passiamo true solo se è la fine dell'ultimo blocco dell'ultimo segmento
+                const endLine = getCutLine(tEnd, false, isAtAbsoluteEnd);
+
+                units.push({
+                    id: `${this.id}_u${units.length}`,
+                    vertices: [
+                        { ...startLine.L },
+                        { ...endLine.L },
+                        { ...endLine.R },
+                        { ...startLine.R }
+                    ]
+                });
+            }
         }
+        return units;
     }
-    return units;
-}
 
     /**
      * Calcola i punti paralleli (Sinistra/Destra) usando i miter joints
@@ -116,6 +128,7 @@ generateDestructibleUnits() {
     }
 
     getMiterNormal(prev, curr, next) {
+
         if (!prev) { // Inizio muro
             const dir = this.normalize({ x: next.x - curr.x, y: next.y - curr.y });
             return { x: -dir.y, y: dir.x };
@@ -130,7 +143,7 @@ generateDestructibleUnits() {
         const dir2 = this.normalize({ x: next.x - curr.x, y: next.y - curr.y });
         const tangent = this.normalize({ x: dir1.x + dir2.x, y: dir1.y + dir2.y });
         const miterNormal = { x: -tangent.y, y: tangent.x };
-        
+
         // Correzione lunghezza miter (per mantenere lo spessore costante negli angoli)
         const dot = miterNormal.x * (-dir1.y) + miterNormal.y * dir1.x;
         const length = Math.min(1 / dot, 2.0); // Cap a 2.0 per evitare angoli infiniti
