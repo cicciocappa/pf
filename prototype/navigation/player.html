@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavMesh Player</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --panel-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #4a90e2;
+            --success-color: #27ae60;
+            --danger-color: #e74c3c;
+            --path-color: #f39c12;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        header {
+            flex: 0 0 auto;
+            background-color: var(--panel-bg);
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #404040;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        #controls {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        button {
+            background-color: #404040;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        button:hover {
+            background-color: #505050;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            left: 0;
+            top: 0;
+            opacity: 0;
+            cursor: pointer;
+            width: 100%;
+            height: 100%;
+        }
+
+        .file-input-wrapper span {
+            background-color: #404040;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            display: inline-block;
+            font-size: 0.9rem;
+        }
+
+        .file-input-wrapper:hover span {
+            background-color: #505050;
+        }
+
+        #status {
+            font-size: 0.9rem;
+            color: #888;
+            min-width: 200px;
+        }
+
+        #info-panel {
+            background-color: var(--panel-bg);
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid #404040;
+            font-size: 0.85rem;
+            display: flex;
+            gap: 2rem;
+        }
+
+        #info-panel span {
+            color: #888;
+        }
+
+        #info-panel strong {
+            color: var(--text-color);
+        }
+
+        main {
+            flex: 1 1 auto;
+            display: flex;
+            padding: 1rem;
+            min-height: 0;
+            width: 100%;
+        }
+
+        #canvas-container {
+            flex: 1 1 auto;
+            width: 100%;
+            height: 100%;
+            background-color: #222;
+            border: 1px solid #404040;
+            border-radius: 4px;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+            cursor: crosshair;
+            width: 100%;
+            height: 100%;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 4px 0;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <header>
+            <h1>NavMesh Player</h1>
+            <div id="controls">
+                <div class="file-input-wrapper">
+                    <span>Load Map</span>
+                    <input type="file" id="load-map" accept=".json">
+                </div>
+                <div class="file-input-wrapper">
+                    <span>Load NavMesh</span>
+                    <input type="file" id="load-navmesh" accept=".json">
+                </div>
+                <button id="btn-clear-path">Clear Path</button>
+                <button id="btn-clear-all" style="background-color: var(--danger-color);">Clear All</button>
+            </div>
+            <div id="status">Click two points to find path</div>
+        </header>
+
+        <div id="info-panel">
+            <div><span>Map:</span> <strong id="info-map">Not loaded</strong></div>
+            <div><span>NavMesh:</span> <strong id="info-navmesh">Not loaded</strong></div>
+            <div><span>Path Length:</span> <strong id="info-path-length">-</strong></div>
+        </div>
+
+        <main>
+            <div id="canvas-container">
+                <canvas id="player-canvas"></canvas>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(74, 144, 226, 0.3); border: 1px solid rgba(74, 144, 226, 0.8);"></div>
+                        <span>NavMesh</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(231, 76, 60, 0.4); border: 1px solid rgba(231, 76, 60, 0.8);"></div>
+                        <span>Obstacle (blocked)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(39, 174, 96, 0.3); border: 1px solid rgba(39, 174, 96, 0.8);"></div>
+                        <span>Obstacle (walkable)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--success-color);"></div>
+                        <span>Start Point</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--danger-color);"></div>
+                        <span>End Point</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: var(--path-color);"></div>
+                        <span>Path</span>
+                    </div>
+                    <div class="legend-item" style="margin-top: 8px; font-style: italic; color: #888;">
+                        <span>Right-click obstacle to toggle</span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        class NavMeshPlayer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.EPSILON = 1e-6;
+
+                // Data
+                this.map = null;
+                this.navMesh = null;      // Array di {vertices, walkable}
+                this.obstacles = null;    // Array di {vertices, walkable, obstacleId}
+                this.adjacency = null;
+
+                // Path finding
+                this.startPoint = null;
+                this.endPoint = null;
+                this.path = null;
+                this.polyPath = null; // Path of polygon indices
+
+                this.bindEvents();
+            }
+
+            bindEvents() {
+                this.canvas.addEventListener('click', (e) => this.handleClick(e));
+                this.canvas.addEventListener('contextmenu', (e) => this.handleRightClick(e));
+            }
+
+            getMousePos(evt) {
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = this.canvas.width / rect.width;
+                const scaleY = this.canvas.height / rect.height;
+                return {
+                    x: (evt.clientX - rect.left) * scaleX,
+                    y: (evt.clientY - rect.top) * scaleY
+                };
+            }
+
+            handleClick(e) {
+                if (!this.allPolygons || this.allPolygons.length === 0) {
+                    updateStatus("Please load a NavMesh first");
+                    return;
+                }
+
+                const pos = this.getMousePos(e);
+                const polyIdx = this.findContainingPolygon(pos);
+
+                if (polyIdx === -1) {
+                    updateStatus("Click inside the navigable area");
+                    return;
+                }
+
+                if (!this.startPoint) {
+                    this.startPoint = pos;
+                    this.startPolyIdx = polyIdx;
+                    this.path = null;
+                    this.polyPath = null;
+                    updateStatus("Start set. Click to set end point.");
+                } else if (!this.endPoint) {
+                    this.endPoint = pos;
+                    this.endPolyIdx = polyIdx;
+                    this.findPath();
+                } else {
+                    this.startPoint = pos;
+                    this.startPolyIdx = polyIdx;
+                    this.endPoint = null;
+                    this.path = null;
+                    this.polyPath = null;
+                    updateStatus("Start set. Click to set end point.");
+                }
+
+                this.draw();
+            }
+
+            handleRightClick(e) {
+                e.preventDefault();
+
+                if (!this.obstacles || this.obstacles.length === 0) {
+                    return;
+                }
+
+                const pos = this.getMousePos(e);
+
+                // Cerca se il click e' su un ostacolo
+                for (let i = 0; i < this.obstacles.length; i++) {
+                    const obstacle = this.obstacles[i];
+                    if (this.pointInPolygon(pos, obstacle.vertices)) {
+                        // Toggle lo stato walkable
+                        obstacle.walkable = !obstacle.walkable;
+
+                        // Ricostruisci l'adiacenza
+                        this.buildAdjacency();
+
+                        // Se c'erano start e end point, ricalcola il path
+                        if (this.startPoint && this.endPoint) {
+                            // Ricalcola gli indici dei poligoni contenenti i punti
+                            this.startPolyIdx = this.findContainingPolygon(this.startPoint);
+                            this.endPolyIdx = this.findContainingPolygon(this.endPoint);
+
+                            if (this.startPolyIdx !== -1 && this.endPolyIdx !== -1) {
+                                this.findPath();
+                            } else {
+                                this.path = null;
+                                this.polyPath = null;
+                                updateStatus("Path invalidated - points outside walkable area");
+                            }
+                        }
+
+                        const state = obstacle.walkable ? "walkable" : "blocked";
+                        updateStatus(`Obstacle ${obstacle.obstacleId} is now ${state}`);
+                        this.draw();
+                        return;
+                    }
+                }
+            }
+
+            loadMap(data) {
+                this.map = data;
+
+                // Build info text based on format
+                let infoText = `${data.outer.length} vertices`;
+                if (data.version >= 3) {
+                    // New format (v3+): buildings and walls
+                    const buildingCount = data.buildings ? data.buildings.length : 0;
+                    const wallCount = data.walls ? data.walls.length : 0;
+                    if (buildingCount > 0) infoText += `, ${buildingCount} buildings`;
+                    if (wallCount > 0) infoText += `, ${wallCount} walls`;
+                } else if (data.holes) {
+                    // Old format: holes
+                    infoText += `, ${data.holes.length} holes`;
+                }
+                document.getElementById('info-map').textContent = infoText;
+                this.draw();
+            }
+
+            loadNavMesh(data) {
+                // Reset obstacles
+                this.obstacles = [];
+                this.destructibleGroups = [];
+
+                // Support multiple formats
+                if (data.version === 1) {
+                    // New format (v1) from updated editor
+                    // NavMesh polygons
+                    if (data.navMesh && data.navMesh.polygons) {
+                        this.navMesh = data.navMesh.polygons.map(p => ({
+                            vertices: p.vertices,
+                            walkable: true,
+                            id: p.id
+                        }));
+                    } else {
+                        this.navMesh = [];
+                    }
+
+                    // Static obstacles (non-destructible)
+                    if (data.staticObstacles) {
+                        for (const obs of data.staticObstacles) {
+                            this.obstacles.push({
+                                vertices: obs.vertices,
+                                walkable: false,
+                                obstacleId: obs.id,
+                                type: 'static',
+                                destructible: false
+                            });
+                        }
+                    }
+
+                    // Destructible groups (buildings, walls)
+                    if (data.destructibleGroups) {
+                        this.destructibleGroups = data.destructibleGroups;
+                        for (const group of data.destructibleGroups) {
+                            // Create obstacle entries for each element in the group
+                            for (const elem of group.elements) {
+                                if (elem.type === 'building') {
+                                    this.obstacles.push({
+                                        vertices: elem.vertices,
+                                        walkable: false,
+                                        obstacleId: elem.id,
+                                        type: 'building',
+                                        destructible: true,
+                                        groupId: group.groupId
+                                    });
+                                } else if (elem.type === 'wall') {
+                                    // Wall with multiple segments
+                                    for (let i = 0; i < elem.segments.length; i++) {
+                                        this.obstacles.push({
+                                            vertices: elem.segments[i],
+                                            walkable: false,
+                                            obstacleId: `${elem.id}_seg${i}`,
+                                            type: 'wall_segment',
+                                            destructible: true,
+                                            groupId: group.groupId,
+                                            wallId: elem.id
+                                        });
+                                    }
+                                } else if (elem.type === 'wall_segment') {
+                                    this.obstacles.push({
+                                        vertices: elem.vertices,
+                                        walkable: false,
+                                        obstacleId: `${elem.id}_seg${elem.segmentIndex}`,
+                                        type: 'wall_segment',
+                                        destructible: true,
+                                        groupId: group.groupId,
+                                        wallId: elem.id
+                                    });
+                                }
+                            }
+                        }
+                    }
+                } else if (data.navMesh && Array.isArray(data.navMesh)) {
+                    // Old format - array of polygons
+                    if (data.navMesh.length > 0 && data.navMesh[0].vertices) {
+                        this.navMesh = data.navMesh;
+                    } else {
+                        this.navMesh = data.navMesh.map(poly => ({
+                            vertices: poly,
+                            walkable: true
+                        }));
+                    }
+                    // Old obstacles format
+                    if (data.obstacles) {
+                        this.obstacles = data.obstacles.map((obs, idx) => ({
+                            ...obs,
+                            obstacleId: obs.obstacleId || idx,
+                            type: 'legacy',
+                            destructible: true
+                        }));
+                    }
+                } else {
+                    this.navMesh = [];
+                }
+
+                this.buildAdjacency();
+
+                const staticCount = this.obstacles.filter(o => !o.destructible).length;
+                const destructCount = this.obstacles.filter(o => o.destructible).length;
+                let info = `${this.navMesh.length} polygons`;
+                if (staticCount > 0) info += `, ${staticCount} static`;
+                if (destructCount > 0) info += `, ${destructCount} destructible`;
+                document.getElementById('info-navmesh').textContent = info;
+                this.clearPath();
+                this.draw();
+            }
+
+            clearPath() {
+                this.startPoint = null;
+                this.endPoint = null;
+                this.path = null;
+                this.polyPath = null;
+                document.getElementById('info-path-length').textContent = '-';
+                updateStatus("Click two points to find path");
+                this.draw();
+            }
+
+            clearAll() {
+                this.map = null;
+                this.navMesh = null;
+                this.obstacles = null;
+                this.allPolygons = null;
+                this.polygonMeta = null;
+                this.adjacency = null;
+                this.clearPath();
+                document.getElementById('info-map').textContent = 'Not loaded';
+                document.getElementById('info-navmesh').textContent = 'Not loaded';
+                this.draw();
+            }
+
+            buildAdjacency() {
+                // Costruisce un array unificato di tutti i poligoni walkable
+                // (navMesh walkable + obstacles che sono stati resi walkable)
+                this.allPolygons = [];
+                this.polygonMeta = []; // Metadati per ogni poligono (tipo, indice originale)
+
+                // Aggiungi i poligoni della navMesh
+                for (let i = 0; i < this.navMesh.length; i++) {
+                    const poly = this.navMesh[i];
+                    if (poly.walkable) {
+                        this.allPolygons.push(poly.vertices);
+                        this.polygonMeta.push({ type: 'navmesh', originalIdx: i });
+                    }
+                }
+
+                // Aggiungi gli ostacoli che sono stati resi walkable
+                if (this.obstacles) {
+                    for (let i = 0; i < this.obstacles.length; i++) {
+                        const obstacle = this.obstacles[i];
+                        if (obstacle.walkable) {
+                            this.allPolygons.push(obstacle.vertices);
+                            this.polygonMeta.push({ type: 'obstacle', originalIdx: i, obstacleId: obstacle.obstacleId });
+                        }
+                    }
+                }
+
+                const n = this.allPolygons.length;
+                this.adjacency = [];
+                this.polygonCenters = [];
+
+                for (let i = 0; i < n; i++) {
+                    this.polygonCenters.push(this.getPolygonCenter(this.allPolygons[i]));
+                    this.adjacency.push([]);
+                }
+
+                for (let i = 0; i < n; i++) {
+                    for (let j = i + 1; j < n; j++) {
+                        const sharedEdge = this.findSharedEdge(this.allPolygons[i], this.allPolygons[j]);
+                        if (sharedEdge) {
+                            // Calcola il punto medio del portale (edge condiviso)
+                            const portalMid = {
+                                x: (sharedEdge[0].x + sharedEdge[1].x) / 2,
+                                y: (sharedEdge[0].y + sharedEdge[1].y) / 2
+                            };
+                            // Il costo base non viene più usato direttamente in A*
+                            // ma lo manteniamo per riferimento
+                            const dist = this.distance(this.polygonCenters[i], this.polygonCenters[j]);
+                            this.adjacency[i].push({ idx: j, cost: dist, edge: sharedEdge, portalMid: portalMid });
+                            this.adjacency[j].push({ idx: i, cost: dist, edge: sharedEdge, portalMid: portalMid });
+                        }
+                    }
+                }
+            }
+
+            getPolygonCenter(poly) {
+                let cx = 0, cy = 0;
+                for (const p of poly) {
+                    cx += p.x;
+                    cy += p.y;
+                }
+                return { x: cx / poly.length, y: cy / poly.length };
+            }
+
+            findSharedEdge(polyA, polyB) {
+                const common = [];
+                for (const pA of polyA) {
+                    for (const pB of polyB) {
+                        if (this.pointsEqual(pA, pB)) {
+                            if (!common.some(c => this.pointsEqual(c, pA))) {
+                                common.push({ x: pA.x, y: pA.y });
+                            }
+                        }
+                    }
+                }
+                return common.length === 2 ? common : null;
+            }
+
+            pointsEqual(p1, p2) {
+                return Math.abs(p1.x - p2.x) < 1 && Math.abs(p1.y - p2.y) < 1;
+            }
+
+            findContainingPolygon(point) {
+                // Cerca tra i poligoni walkable (allPolygons)
+                for (let i = 0; i < this.allPolygons.length; i++) {
+                    if (this.pointInPolygon(point, this.allPolygons[i])) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
+
+            pointInPolygon(point, poly) {
+                let inside = false;
+                for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                    const xi = poly[i].x, yi = poly[i].y;
+                    const xj = poly[j].x, yj = poly[j].y;
+                    if (((yi > point.y) !== (yj > point.y)) &&
+                        (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi)) {
+                        inside = !inside;
+                    }
+                }
+                return inside;
+            }
+
+            distance(a, b) {
+                return Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+            }
+
+            // A* pathfinding con costo basato sui punti medi dei portali
+            findPath() {
+                if (this.startPolyIdx === this.endPolyIdx) {
+                    this.path = [{ ...this.startPoint }, { ...this.endPoint }];
+                    this.polyPath = [this.startPolyIdx];
+                    this.updatePathInfo();
+                    updateStatus("Direct path (same polygon)");
+                    return;
+                }
+
+                const openSet = new Map();
+                const closedSet = new Set();
+                const gScore = new Map();
+                const fScore = new Map();
+                const cameFrom = new Map();
+                // Traccia il punto corrente per ogni nodo visitato
+                const currentPoint = new Map();
+
+                const start = this.startPolyIdx;
+                const goal = this.endPolyIdx;
+
+                gScore.set(start, 0);
+                currentPoint.set(start, this.startPoint);
+                // Euristica: distanza diretta da startPoint a endPoint
+                fScore.set(start, this.distance(this.startPoint, this.endPoint));
+                openSet.set(start, fScore.get(start));
+
+                while (openSet.size > 0) {
+                    let current = null;
+                    let lowestF = Infinity;
+                    for (const [node, f] of openSet) {
+                        if (f < lowestF) {
+                            lowestF = f;
+                            current = node;
+                        }
+                    }
+
+                    if (current === goal) {
+                        const polyPath = [current];
+                        while (cameFrom.has(current)) {
+                            current = cameFrom.get(current);
+                            polyPath.unshift(current);
+                        }
+
+                        this.polyPath = polyPath;
+                        // String pulling per ottenere il percorso ottimale attraverso i portali
+                        let path = this.stringPull(polyPath);
+                        // Line-of-sight post-processing per tagliare attraverso ostacoli rimossi
+                        path = this.smoothPath(path);
+                        this.path = path;
+                        this.updatePathInfo();
+                        updateStatus(`Path found through ${polyPath.length} polygons`);
+                        return;
+                    }
+
+                    openSet.delete(current);
+                    closedSet.add(current);
+
+                    const currPoint = currentPoint.get(current);
+
+                    for (const neighbor of this.adjacency[current]) {
+                        if (closedSet.has(neighbor.idx)) continue;
+
+                        // Costo = distanza dal punto corrente al punto medio del portale
+                        const costToPortal = this.distance(currPoint, neighbor.portalMid);
+                        const tentativeG = gScore.get(current) + costToPortal;
+
+                        if (!openSet.has(neighbor.idx)) {
+                            openSet.set(neighbor.idx, Infinity);
+                        }
+
+                        if (tentativeG < (gScore.get(neighbor.idx) || Infinity)) {
+                            cameFrom.set(neighbor.idx, current);
+                            gScore.set(neighbor.idx, tentativeG);
+                            // Il punto corrente per il neighbor e' il punto medio del portale
+                            currentPoint.set(neighbor.idx, neighbor.portalMid);
+                            // Euristica: distanza dal punto medio del portale all'endPoint
+                            const h = this.distance(neighbor.portalMid, this.endPoint);
+                            const f = tentativeG + h;
+                            fScore.set(neighbor.idx, f);
+                            openSet.set(neighbor.idx, f);
+                        }
+                    }
+                }
+
+                this.path = null;
+                this.polyPath = null;
+                updateStatus("No path found!");
+            }
+
+            heuristic(a, b) {
+                // Mantenuta per retrocompatibilita', ma non piu' usata in findPath
+                return this.distance(this.polygonCenters[a], this.polygonCenters[b]);
+            }
+
+            // Get the shared edge between two adjacent polygons in the path
+            getPortalEdge(fromIdx, toIdx) {
+                for (const neighbor of this.adjacency[fromIdx]) {
+                    if (neighbor.idx === toIdx) {
+                        return neighbor.edge;
+                    }
+                }
+                return null;
+            }
+
+            // String pulling using the Simple Stupid Funnel Algorithm
+            stringPull(polyPath) {
+                if (polyPath.length === 0) return [{ ...this.startPoint }, { ...this.endPoint }];
+                if (polyPath.length === 1) return [{ ...this.startPoint }, { ...this.endPoint }];
+
+                // Build portal list
+                const portals = [];
+
+                // Start portal (degenerate - both points are start)
+                portals.push({
+                    left: { ...this.startPoint },
+                    right: { ...this.startPoint }
+                });
+
+                // Portals between consecutive polygons
+                for (let i = 0; i < polyPath.length - 1; i++) {
+                    const edge = this.getPortalEdge(polyPath[i], polyPath[i + 1]);
+                    if (edge) {
+                        // Determine left/right orientation
+                        // We need to orient the portal so that "left" is on the left side
+                        // when looking from the current polygon to the next
+                        const fromCenter = this.polygonCenters[polyPath[i]];
+                        const toCenter = this.polygonCenters[polyPath[i + 1]];
+
+                        // Direction of travel
+                        const dirX = toCenter.x - fromCenter.x;
+                        const dirY = toCenter.y - fromCenter.y;
+
+                        // Edge vector
+                        const edgeX = edge[1].x - edge[0].x;
+                        const edgeY = edge[1].y - edge[0].y;
+
+                        // Cross product to determine orientation
+                        const cross = dirX * edgeY - dirY * edgeX;
+
+                        if (cross > 0) {
+                            portals.push({
+                                left: { x: edge[0].x, y: edge[0].y },
+                                right: { x: edge[1].x, y: edge[1].y }
+                            });
+                        } else {
+                            portals.push({
+                                left: { x: edge[1].x, y: edge[1].y },
+                                right: { x: edge[0].x, y: edge[0].y }
+                            });
+                        }
+                    }
+                }
+
+                // End portal (degenerate - both points are end)
+                portals.push({
+                    left: { ...this.endPoint },
+                    right: { ...this.endPoint }
+                });
+
+                // Simple Stupid Funnel Algorithm
+                return this.funnel(portals);
+            }
+
+            funnel(portals) {
+                const path = [];
+
+                let apexIndex = 0;
+                let leftIndex = 0;
+                let rightIndex = 0;
+
+                let apex = portals[0].left; // Start point
+                let left = portals[0].left;
+                let right = portals[0].right;
+
+                path.push({ x: apex.x, y: apex.y });
+
+                for (let i = 1; i < portals.length; i++) {
+                    const newLeft = portals[i].left;
+                    const newRight = portals[i].right;
+
+                    // Update right vertex
+                    if (this.triArea2(apex, right, newRight) <= 0) {
+                        if (this.vEqual(apex, right) || this.triArea2(apex, left, newRight) > 0) {
+                            // Tighten the funnel
+                            right = newRight;
+                            rightIndex = i;
+                        } else {
+                            // Right over left, insert left to path and restart scan from left
+                            path.push({ x: left.x, y: left.y });
+
+                            // Make current left the new apex
+                            apex = left;
+                            apexIndex = leftIndex;
+
+                            // Reset portal
+                            left = apex;
+                            right = apex;
+                            leftIndex = apexIndex;
+                            rightIndex = apexIndex;
+
+                            // Restart scan
+                            i = apexIndex;
+                            continue;
+                        }
+                    }
+
+                    // Update left vertex
+                    if (this.triArea2(apex, left, newLeft) >= 0) {
+                        if (this.vEqual(apex, left) || this.triArea2(apex, right, newLeft) < 0) {
+                            // Tighten the funnel
+                            left = newLeft;
+                            leftIndex = i;
+                        } else {
+                            // Left over right, insert right to path and restart scan from right
+                            path.push({ x: right.x, y: right.y });
+
+                            // Make current right the new apex
+                            apex = right;
+                            apexIndex = rightIndex;
+
+                            // Reset portal
+                            left = apex;
+                            right = apex;
+                            leftIndex = apexIndex;
+                            rightIndex = apexIndex;
+
+                            // Restart scan
+                            i = apexIndex;
+                            continue;
+                        }
+                    }
+                }
+
+                // Add end point if not already added
+                const lastPoint = path[path.length - 1];
+                if (!this.vEqual(lastPoint, this.endPoint)) {
+                    path.push({ x: this.endPoint.x, y: this.endPoint.y });
+                }
+
+                return path;
+            }
+
+            // Signed area of triangle * 2
+            triArea2(a, b, c) {
+                return (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+            }
+
+            vEqual(a, b) {
+                return Math.abs(a.x - b.x) < this.EPSILON && Math.abs(a.y - b.y) < this.EPSILON;
+            }
+
+            // ========== LINE OF SIGHT POST-PROCESSING ==========
+
+            /**
+             * Verifica se due segmenti (p1-p2) e (p3-p4) si intersecano
+             */
+            segmentsIntersect(p1, p2, p3, p4) {
+                const d1 = this.triArea2(p3, p4, p1);
+                const d2 = this.triArea2(p3, p4, p2);
+                const d3 = this.triArea2(p1, p2, p3);
+                const d4 = this.triArea2(p1, p2, p4);
+
+                if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+                    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+                    return true;
+                }
+
+                // Casi collineari (ignoriamo per semplicità - ritorniamo false)
+                return false;
+            }
+
+            /**
+             * Verifica se un segmento (p1-p2) interseca i bordi di un poligono
+             */
+            lineIntersectsPolygon(p1, p2, polygon) {
+                for (let i = 0; i < polygon.length; i++) {
+                    const j = (i + 1) % polygon.length;
+                    if (this.segmentsIntersect(p1, p2, polygon[i], polygon[j])) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            /**
+             * Verifica se c'è line-of-sight tra due punti.
+             * Ritorna true se il segmento NON interseca nessun ostacolo bloccato
+             * e NON esce dal bordo della mappa.
+             */
+            canSeeThrough(p1, p2) {
+                // Controlla che non esca dal bordo esterno della mappa (se caricata)
+                if (this.map && this.map.outer) {
+                    if (this.lineIntersectsPolygon(p1, p2, this.map.outer)) {
+                        return false;
+                    }
+                }
+
+                // Controlla gli ostacoli bloccati
+                if (this.obstacles) {
+                    for (const obstacle of this.obstacles) {
+                        // Solo gli ostacoli bloccati (walkable = false) impediscono la visuale
+                        if (!obstacle.walkable) {
+                            if (this.lineIntersectsPolygon(p1, p2, obstacle.vertices)) {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
+
+            /**
+             * Post-processing del percorso: prova a semplificare usando line-of-sight
+             * attraverso gli ostacoli che sono stati resi walkable.
+             */
+            smoothPath(path) {
+                if (!path || path.length <= 2) return path;
+
+                const smoothed = [path[0]];
+                let current = 0;
+
+                while (current < path.length - 1) {
+                    // Prova a saltare il più lontano possibile
+                    let farthest = current + 1;
+
+                    for (let i = path.length - 1; i > current + 1; i--) {
+                        if (this.canSeeThrough(path[current], path[i])) {
+                            farthest = i;
+                            break;
+                        }
+                    }
+
+                    smoothed.push(path[farthest]);
+                    current = farthest;
+                }
+
+                return smoothed;
+            }
+
+            // ========== END LINE OF SIGHT ==========
+
+            updatePathInfo() {
+                if (!this.path || this.path.length < 2) {
+                    document.getElementById('info-path-length').textContent = '-';
+                    return;
+                }
+
+                let length = 0;
+                for (let i = 0; i < this.path.length - 1; i++) {
+                    length += this.distance(this.path[i], this.path[i + 1]);
+                }
+                document.getElementById('info-path-length').textContent = length.toFixed(2) + ' px';
+            }
+
+            draw() {
+                const ctx = this.ctx;
+                ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                // Draw map
+                if (this.map) {
+                    ctx.strokeStyle = '#4a90e2';
+                    ctx.lineWidth = 2;
+                    this.drawPolygon(ctx, this.map.outer, true);
+                    ctx.stroke();
+
+                    // Draw holes (old format only - new format uses obstacles from navmesh)
+                    if (this.map.holes && this.map.holes.length > 0) {
+                        ctx.fillStyle = 'rgba(231, 76, 60, 0.3)';
+                        ctx.strokeStyle = '#e74c3c';
+                        ctx.lineWidth = 2;
+                        for (const hole of this.map.holes) {
+                            this.drawPolygon(ctx, hole, true);
+                            ctx.fill();
+                            ctx.stroke();
+                        }
+                    }
+                }
+
+                // Draw NavMesh polygons
+                if (this.navMesh) {
+                    ctx.lineWidth = 1;
+
+                    for (const poly of this.navMesh) {
+                        if (poly.walkable) {
+                            ctx.fillStyle = 'rgba(74, 144, 226, 0.2)';
+                            ctx.strokeStyle = 'rgba(74, 144, 226, 0.5)';
+                        } else {
+                            // NavMesh polygon non walkable (caso raro)
+                            ctx.fillStyle = 'rgba(100, 100, 100, 0.2)';
+                            ctx.strokeStyle = 'rgba(100, 100, 100, 0.5)';
+                        }
+                        this.drawPolygon(ctx, poly.vertices, true);
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
+
+                // Draw obstacles
+                if (this.obstacles) {
+                    ctx.lineWidth = 2;
+
+                    for (const obstacle of this.obstacles) {
+                        if (obstacle.walkable) {
+                            // Ostacolo rimosso (attraversabile) - verde
+                            ctx.fillStyle = 'rgba(39, 174, 96, 0.3)';
+                            ctx.strokeStyle = 'rgba(39, 174, 96, 0.8)';
+                        } else {
+                            // Ostacolo attivo (bloccante) - rosso
+                            ctx.fillStyle = 'rgba(231, 76, 60, 0.4)';
+                            ctx.strokeStyle = 'rgba(231, 76, 60, 0.8)';
+                        }
+                        this.drawPolygon(ctx, obstacle.vertices, true);
+                        ctx.fill();
+                        ctx.stroke();
+                    }
+                }
+
+                // Draw path
+                if (this.path && this.path.length >= 2) {
+                    ctx.strokeStyle = '#f39c12';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(this.path[0].x, this.path[0].y);
+                    for (let i = 1; i < this.path.length; i++) {
+                        ctx.lineTo(this.path[i].x, this.path[i].y);
+                    }
+                    ctx.stroke();
+
+                    // Draw waypoints
+                    ctx.fillStyle = '#f39c12';
+                    for (let i = 1; i < this.path.length - 1; i++) {
+                        ctx.beginPath();
+                        ctx.arc(this.path[i].x, this.path[i].y, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+
+                // Draw start point
+                if (this.startPoint) {
+                    ctx.fillStyle = '#27ae60';
+                    ctx.beginPath();
+                    ctx.arc(this.startPoint.x, this.startPoint.y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                // Draw end point
+                if (this.endPoint) {
+                    ctx.fillStyle = '#e74c3c';
+                    ctx.beginPath();
+                    ctx.arc(this.endPoint.x, this.endPoint.y, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+
+            drawPolygon(ctx, points, close = false) {
+                ctx.beginPath();
+                if (points.length === 0) return;
+                ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
+                if (close) ctx.closePath();
+            }
+        }
+
+        function updateStatus(text) {
+            document.getElementById('status').textContent = text;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('player-canvas');
+            const container = document.getElementById('canvas-container');
+
+            function resizeCanvas() {
+                canvas.width = container.clientWidth;
+                canvas.height = container.clientHeight;
+                player.draw();
+            }
+
+            window.addEventListener('resize', resizeCanvas);
+
+            const player = new NavMeshPlayer(canvas);
+            resizeCanvas();
+
+            document.getElementById('load-map').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            const data = JSON.parse(event.target.result);
+                            if (data.outer) {
+                                player.loadMap(data);
+                                updateStatus("Map loaded");
+                            } else {
+                                alert("Invalid map file");
+                            }
+                        } catch (err) {
+                            alert("Error parsing map file: " + err.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            });
+
+            document.getElementById('load-navmesh').addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        try {
+                            const data = JSON.parse(event.target.result);
+                            if (data.navMesh) {
+                                player.loadNavMesh(data);
+                                updateStatus("NavMesh loaded. Click to set start point.");
+                            } else {
+                                alert("Invalid navmesh file");
+                            }
+                        } catch (err) {
+                            alert("Error parsing navmesh file: " + err.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            });
+
+            document.getElementById('btn-clear-path').addEventListener('click', () => {
+                player.clearPath();
+            });
+
+            document.getElementById('btn-clear-all').addEventListener('click', () => {
+                player.clearAll();
+            });
+        });
+    </script>
+</body>
+
+</html>

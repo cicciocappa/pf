@@ -7,7 +7,7 @@
     <title>NavMesh Generator</title>
     <link rel="stylesheet" href="style.css">
     <!-- Poly2Tri for Constrained Delaunay Triangulation -->
-    <script src="https://cdn.jsdelivr.net/npm/poly2tri@1.5.0/dist/poly2tri.min.js"></script>
+    <script src="js/poly2tri.min.js"></script>
 </head>
 
 <body>
@@ -15,14 +15,31 @@
         <header>
             <h1>NavMesh Generator</h1>
             <div id="controls">
+                <label class="file-input-btn">
+                    Load Map
+                    <input type="file" id="btn-load-map" accept=".json" hidden>
+                </label>
                 <button id="btn-draw-poly" class="active">Draw Outer Map</button>
                 <button id="btn-draw-hole">Draw Obstacle (Hole)</button>
                 <button id="btn-bake" class="primary">Bake NavMesh</button>
                 <button id="btn-clear">Clear All</button>
-                <button id="btn-export">Export JSON</button>
+                <button id="btn-export-map">Export Map</button>
+                <button id="btn-export-navmesh">Export NavMesh</button>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-skip-merge">
+                    Skip Merge (triangles only)
+                </label>
             </div>
             <div id="status">Mode: Draw Outer Map</div>
         </header>
+
+        <div id="stats-panel" class="hidden">
+            <h3>NavMesh Statistics</h3>
+            <div class="stat-row"><span>Polygons:</span><span id="stat-count">-</span></div>
+            <div class="stat-row"><span>Min Area:</span><span id="stat-min-area">-</span></div>
+            <div class="stat-row"><span>Max Area:</span><span id="stat-max-area">-</span></div>
+            <div class="stat-row"><span>Avg Area:</span><span id="stat-avg-area">-</span></div>
+        </div>
 
         <main>
             <div id="canvas-container">

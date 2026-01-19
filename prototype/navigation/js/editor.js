@@ -77,8 +77,6 @@ export class Editor {
             this.currentPoly = [];
         }
 
-        // Snap logic could go here
-
         this.currentPoly.push(pos);
         this.draw();
     }
@@ -108,6 +106,15 @@ export class Editor {
         this.holes = [];
         this.currentPoly = [];
         this.navMesh = null;
+        this.triangles = null; // Triangoli non mergiati
+        this.hideStats();
+        this.draw();
+    }
+
+    loadMap(data) {
+        this.clear();
+        this.outerPoly = data.outer || [];
+        this.holes = data.holes || [];
         this.draw();
     }
 
@@ -119,8 +126,15 @@ export class Editor {
 
         console.log("Baking NavMesh...");
         try {
-            this.navMesh = this.geometry.computeNavMesh(this.outerPoly, this.holes);
-            console.log("NavMesh generated:", this.navMesh);
+            // Salva sia i triangoli che la mesh mergiata
+            const result = this.geometry.computeNavMeshWithTriangles(this.outerPoly, this.holes);
+            this.triangles = result.triangles;
+            this.navMesh = result.merged;
+            console.log("NavMesh generated:", this.navMesh.length, "polygons from", this.triangles.length, "triangles");
+
+            // Calculate and display statistics
+            const stats = this.geometry.calculateStats(this.navMesh);
+            this.displayStats(stats);
         } catch (err) {
             console.error(err);
             alert("Error generating NavMesh: " + err.message);
@@ -128,23 +142,72 @@ export class Editor {
         this.draw();
     }
 
-    exportJson() {
-        if (!this.navMesh) {
-            alert("Please bake the NavMesh first.");
+    displayStats(stats) {
+        const panel = document.getElementById('stats-panel');
+        panel.classList.remove('hidden');
+
+        document.getElementById('stat-count').textContent = stats.count;
+        document.getElementById('stat-min-area').textContent = stats.minArea.toFixed(2) + ' px²';
+        document.getElementById('stat-max-area').textContent = stats.maxArea.toFixed(2) + ' px²';
+        document.getElementById('stat-avg-area').textContent = stats.avgArea.toFixed(2) + ' px²';
+    }
+
+    hideStats() {
+        const panel = document.getElementById('stats-panel');
+        panel.classList.add('hidden');
+    }
+
+    exportMap() {
+        if (this.outerPoly.length < 3) {
+            alert("Please draw a map first.");
             return;
         }
 
         const data = {
             outer: this.outerPoly,
-            holes: this.holes,
-            navMesh: this.navMesh
+            holes: this.holes
         };
 
-        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data));
+        this.downloadJson(data, "map.json");
+    }
+
+    exportNavMesh(skipMerge = false) {
+        if (!this.navMesh) {
+            alert("Please bake the NavMesh first.");
+            return;
+        }
+
+        // Usa i triangoli se skipMerge è true, altrimenti la mesh mergiata
+        const polygons = skipMerge ? this.triangles : this.navMesh;
+
+        // Formato con metadati per supportare ostacoli toggleabili
+        const navMeshWithMeta = polygons.map(poly => ({
+            vertices: poly,
+            walkable: true
+        }));
+
+        // Aggiungi gli ostacoli come poligoni non attraversabili
+        const obstaclesWithMeta = this.holes.map((hole, idx) => ({
+            vertices: hole,
+            walkable: false,
+            obstacleId: idx
+        }));
+
+        const data = {
+            navMesh: navMeshWithMeta,
+            obstacles: obstaclesWithMeta
+        };
+
+        const filename = skipMerge ? "navmesh-triangles.json" : "navmesh.json";
+        this.downloadJson(data, filename);
+    }
+
+    downloadJson(data, filename) {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
         const downloadAnchorNode = document.createElement('a');
         downloadAnchorNode.setAttribute("href", dataStr);
-        downloadAnchorNode.setAttribute("download", "navmesh.json");
-        document.body.appendChild(downloadAnchorNode); // required for firefox
+        downloadAnchorNode.setAttribute("download", filename);
+        document.body.appendChild(downloadAnchorNode);
         downloadAnchorNode.click();
         downloadAnchorNode.remove();
     }
@@ -160,7 +223,7 @@ export class Editor {
             ctx.lineWidth = 1;
 
             for (const poly of this.navMesh) {
-                this.drawPolygonPath(ctx, poly);
+                this.drawPolygonPath(ctx, poly, true);
                 ctx.fill();
                 ctx.stroke();
             }

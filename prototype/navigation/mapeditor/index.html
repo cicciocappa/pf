@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Editor - NavMesh Generator</title>
+    <link rel="stylesheet" href="editor.css">
+    <script src="js/poly2tri.min.js"></script>
+</head>
+
+<body>
+    <div id="app">
+        <!-- Left Toolbar -->
+        <aside id="toolbar">
+            <div class="toolbar-section">
+                <h3>Tools</h3>
+                <button class="tool-btn active" data-tool="select" title="Select (V)">
+                    <span class="icon">&#9654;</span>
+                    <span class="label">Select</span>
+                    <span class="shortcut">V</span>
+                </button>
+                <button class="tool-btn" data-tool="draw-area" title="Draw Area (A)">
+                    <span class="icon">&#11203;</span>
+                    <span class="label">Draw Area</span>
+                    <span class="shortcut">A</span>
+                </button>
+                <button class="tool-btn" data-tool="building" title="Add Building (B)">
+                    <span class="icon">&#9632;</span>
+                    <span class="label">Building</span>
+                    <span class="shortcut">B</span>
+                </button>
+                <button class="tool-btn" data-tool="wall" title="Add Wall (W)">
+                    <span class="icon">&#9473;</span>
+                    <span class="label">Wall</span>
+                    <span class="shortcut">W</span>
+                </button>
+                <button class="tool-btn" data-tool="obstacle" title="Add Obstacle (O)">
+                    <span class="icon">&#9724;</span>
+                    <span class="label">Obstacle</span>
+                    <span class="shortcut">O</span>
+                </button>
+                <button class="tool-btn" data-tool="edit" title="Edit Shape (E)">
+                    <span class="icon">&#9998;</span>
+                    <span class="label">Edit Shape</span>
+                    <span class="shortcut">E</span>
+                </button>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>Actions</h3>
+                <button id="btn-bake" class="action-btn primary">Bake NavMesh</button>
+                <button id="btn-clear-navmesh" class="action-btn">Clear NavMesh</button>
+                <button id="btn-clear" class="action-btn">Clear All</button>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>File</h3>
+                <label class="action-btn file-btn">
+                    Load Map
+                    <input type="file" id="btn-load-map" accept=".json" hidden>
+                </label>
+                <button id="btn-export-map" class="action-btn">Export Map</button>
+                <button id="btn-export-navmesh" class="action-btn">Export NavMesh</button>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>Options</h3>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-snap">
+                    Snap to vertices
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-snap-edge">
+                    Snap to edges
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-snap-grid">
+                    Snap to grid <span id="val-grid-size">(32px)</span>
+                </label>
+                <div class="option-row" id="grid-size-row">
+                    <input type="range" id="rng-grid-size" min="8" max="128" value="32">
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-show-triangles">
+                    Show triangles
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-show-holes-debug">
+                    Debug holes
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-show-merge-components">
+                    Debug components
+                </label>
+            </div>
+        </aside>
+
+        <!-- Main Canvas Area -->
+        <main id="canvas-area">
+            <div id="canvas-container">
+                <canvas id="editor-canvas"></canvas>
+            </div>
+            <div id="status-bar">
+                <span id="status-text">Select a tool to begin</span>
+                <span id="zoom-indicator">Zoom: 100%</span>
+                <button id="btn-reset-view" class="small-btn">Reset View</button>
+            </div>
+        </main>
+
+        <!-- Right Properties Panel (hidden by default) -->
+        <aside id="properties-panel" class="hidden">
+            <h3>Properties</h3>
+            <div id="properties-content"></div>
+        </aside>
+    </div>
+
+    <!-- Properties Dialog -->
+    <div id="dialog-overlay" class="hidden">
+        <div id="properties-dialog">
+            <h3 id="dialog-title">Properties</h3>
+            <div id="dialog-content"></div>
+            <div class="dialog-buttons">
+                <button id="dialog-cancel" class="action-btn">Cancel</button>
+                <button id="dialog-ok" class="action-btn primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Panel -->
+    <div id="stats-panel" class="hidden">
+        <h3>NavMesh Statistics</h3>
+        <div class="stat-row"><span>Polygons:</span><span id="stat-count">-</span></div>
+        <div class="stat-row"><span>Triangles:</span><span id="stat-triangles">-</span></div>
+        <div class="stat-row"><span>Min Area:</span><span id="stat-min-area">-</span></div>
+        <div class="stat-row"><span>Max Area:</span><span id="stat-max-area">-</span></div>
+        <div class="stat-row"><span>Avg Area:</span><span id="stat-avg-area">-</span></div>
+        <button id="btn-close-stats" class="small-btn">Close</button>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

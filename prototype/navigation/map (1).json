@@ -1,0 +1,105 @@
+{
+  "version": 3,
+  "outer": [
+    {
+      "x": 1430,
+      "y": 133
+    },
+    {
+      "x": 1332,
+      "y": 957
+    },
+    {
+      "x": 173,
+      "y": 871
+    },
+    {
+      "x": 257,
+      "y": 85
+    }
+  ],
+  "buildings": [
+    {
+      "id": "bld_1768694904613_vm5jndo5e",
+      "position": {
+        "x": 437,
+        "y": 439
+      },
+      "rotation": -0.7872664625997164,
+      "scaleX": 100.90731565465575,
+      "scaleY": 100.90731565465575,
+      "sides": 4
+    },
+    {
+      "id": "bld_1768694913156_iezqs7ts1",
+      "position": {
+        "x": 891,
+        "y": 478
+      },
+      "rotation": -0.7872664625997164,
+      "scaleX": 100.90731565465575,
+      "scaleY": 100.90731565465575,
+      "sides": 8
+    }
+  ],
+  "walls": [
+    {
+      "id": "wall_1768696596917_imwcfhkw5",
+      "points": [
+        {
+          "x": 422.97268277894347,
+          "y": 510.37857895599075
+        },
+        {
+          "x": 558,
+          "y": 729
+        }
+      ],
+      "thickness": 64,
+      "maxSegmentLength": 70,
+      "startSnap": {
+        "type": "building",
+        "targetId": "bld_1768694904613_vm5jndo5e",
+        "edge": {
+          "p1": {
+            "x": 508.4854299106869,
+            "y": 510.21881537285356
+          },
+          "p2": {
+            "x": 365.78118462714644,
+            "y": 510.4854299106869
+          }
+        },
+        "snapType": "edge"
+      },
+      "endSnap": null
+    },
+    {
+      "id": "wall_1768737299838_x43bamtq3",
+      "points": [
+        {
+          "x": 991.9071395440999,
+          "y": 477.81147505233514
+        },
+        {
+          "x": 1188,
+          "y": 481
+        }
+      ],
+      "thickness": 52,
+      "maxSegmentLength": 65,
+      "startSnap": {
+        "type": "building",
+        "targetId": "bld_1768694913156_iezqs7ts1",
+        "vertexIndex": 3,
+        "vertex": {
+          "x": 991.9071395440999,
+          "y": 477.81147505233514
+        },
+        "snapType": "vertex"
+      },
+      "endSnap": null
+    }
+  ],
+  "obstacles": []
+}

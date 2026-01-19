@@ -1,0 +1,1061 @@
+import { Geometry } from './geometry.js';
+import { MapData } from './models/map-data.js';
+import { Renderer } from './renderer.js';
+import { HistoryManager } from './history-manager.js';
+import { SelectTool } from './tools/select-tool.js';
+import { DrawAreaTool } from './tools/draw-area-tool.js';
+import { BuildingTool } from './tools/building-tool.js';
+import { WallTool } from './tools/wall-tool.js';
+import { EditTool } from './tools/edit-tool.js';
+import { ObstacleTool } from './tools/obstacle-tool.js';
+
+/**
+ * MapEditor - Main editor class
+ */
+export class MapEditor {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.geometry = new Geometry();
+        this.mapData = new MapData();
+        this.renderer = new Renderer(canvas, this);
+        // Nel constructor di MapEditor
+        this.history = new HistoryManager(this);
+        // Salva lo stato iniziale
+        this.history.save();
+
+        // Camera/viewport state
+        this.camera = {
+            offsetX: 0,
+            offsetY: 0,
+            zoom: 1.0
+        };
+
+        // Zoom limits
+        this.minZoom = 0.1;
+        this.maxZoom = 5.0;
+
+        // Pan state
+        this.isPanning = false;
+        this.panStart = { x: 0, y: 0 };
+        this.spacePressed = false;
+
+        // Selection
+        this.selectedObject = null;
+
+        // Snap to vertices
+        this.snapEnabled = false;
+        this.snapPoint = null;
+
+        // Snap to edges
+        this.snapToEdgeEnabled = false;
+        this.edgeSnapInfo = null; // { point, edge, type, targetId }
+
+        // Snap to grid
+        this.gridSnapEnabled = false;
+        this.gridSize = 32; // Default grid size
+
+        // NavMesh
+        this.navmesh = null;
+        this.showTriangles = false;
+
+        // Debug visualization
+        this.showHolesDebug = false;
+        this.debugHoles = null;
+
+        // Debug merge components (building + wall polygons before union)
+        this.showMergeComponentsDebug = false;
+        this.debugMergeComponents = null; // Array of {buildingPoly, wallPoly, mergedPoly}
+
+        // Tools
+        this.tools = {
+            'select': new SelectTool(this),
+            'draw-area': new DrawAreaTool(this),
+            'building': new BuildingTool(this),
+            'wall': new WallTool(this),
+            'obstacle': new ObstacleTool(this),
+            'edit': new EditTool(this)
+        };
+        this.currentTool = null;
+
+        this.bindEvents();
+        this.resize();
+    }
+
+    /**
+     * Bind all event listeners
+     */
+    bindEvents() {
+        // Mouse events
+        this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+        this.canvas.addEventListener('dblclick', (e) => this.handleDoubleClick(e));
+        this.canvas.addEventListener('wheel', (e) => this.handleWheel(e), { passive: false });
+        this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // Keyboard events
+        window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+        window.addEventListener('keyup', (e) => this.handleKeyUp(e));
+
+        // Resize
+        window.addEventListener('resize', () => this.resize());
+    }
+
+    /**
+     * Handle mouse down
+     */
+    handleMouseDown(e) {
+        const worldPos = this.screenToWorld(e.clientX, e.clientY);
+
+        // Middle mouse or space+left for panning
+        if (e.button === 1 || (e.button === 0 && this.spacePressed)) {
+            this.isPanning = true;
+            this.panStart = { x: e.clientX, y: e.clientY };
+            this.canvas.style.cursor = 'grabbing';
+            e.preventDefault();
+            return;
+        }
+
+        // Delegate to current tool
+        if (this.currentTool) {
+            this.currentTool.onMouseDown(worldPos.x, worldPos.y, e);
+        }
+    }
+
+    /**
+     * Handle mouse move
+     */
+    handleMouseMove(e) {
+        const worldPos = this.screenToWorld(e.clientX, e.clientY);
+
+        // Handle panning
+        if (this.isPanning) {
+            const dx = e.clientX - this.panStart.x;
+            const dy = e.clientY - this.panStart.y;
+            this.camera.offsetX += dx;
+            this.camera.offsetY += dy;
+            this.panStart = { x: e.clientX, y: e.clientY };
+            this.render();
+            return;
+        }
+
+        // Delegate to current tool
+        if (this.currentTool) {
+            this.currentTool.onMouseMove(worldPos.x, worldPos.y, e);
+        }
+    }
+
+    /**
+     * Handle mouse up
+     */
+    handleMouseUp(e) {
+        const worldPos = this.screenToWorld(e.clientX, e.clientY);
+
+        // End panning
+        if (this.isPanning) {
+            this.isPanning = false;
+            this.updateCursor();
+            return;
+        }
+
+        // Delegate to current tool
+        if (this.currentTool) {
+            this.currentTool.onMouseUp(worldPos.x, worldPos.y, e);
+        }
+    }
+
+    /**
+     * Handle double click
+     */
+    handleDoubleClick(e) {
+        const worldPos = this.screenToWorld(e.clientX, e.clientY);
+
+        if (this.currentTool) {
+            this.currentTool.onDoubleClick(worldPos.x, worldPos.y, e);
+        }
+    }
+
+    /**
+     * Handle wheel event
+     */
+    handleWheel(e) {
+        const worldPos = this.screenToWorld(e.clientX, e.clientY);
+
+        // Alt+wheel for zoom
+        if (e.altKey) {
+            e.preventDefault();
+            const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+            this.zoomAt(e.clientX, e.clientY, zoomFactor);
+            return;
+        }
+
+        // Delegate to current tool
+        if (this.currentTool) {
+            this.currentTool.onWheel(worldPos.x, worldPos.y, e.deltaY, e);
+        }
+    }
+
+    /**
+     * Handle key down
+     */
+    handleKeyDown(e) {
+        // Space for pan mode
+        if (e.code === 'Space' && !this.spacePressed) {
+            this.spacePressed = true;
+            this.updateCursor();
+            e.preventDefault();
+            return;
+        }
+      
+        // Nel metodo handleKeyDown(e)
+        if (e.ctrlKey || e.metaKey) {
+            if (e.key === 'z' || e.key === 'Z') {
+                this.history.undo();
+                e.preventDefault();
+                this.render();
+                return;
+            }
+            if (e.key === 'y' || e.key === 'Y') {
+                this.history.redo();
+                e.preventDefault();
+                this.render();
+                return;
+            }
+        }
+
+        // Tool shortcuts
+        if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+            switch (e.key.toUpperCase()) {
+                case 'V':
+                    this.setTool('select');
+                    e.preventDefault();
+                    return;
+                case 'A':
+                    this.setTool('draw-area');
+                    e.preventDefault();
+                    return;
+                case 'B':
+                    this.setTool('building');
+                    e.preventDefault();
+                    return;
+                case 'W':
+                    this.setTool('wall');
+                    e.preventDefault();
+                    return;
+                case 'O':
+                    this.setTool('obstacle');
+                    e.preventDefault();
+                    return;
+                case 'E':
+                    this.setTool('edit');
+                    e.preventDefault();
+                    return;
+            }
+        }
+
+        // Delegate to current tool
+        if (this.currentTool) {
+            this.currentTool.onKeyDown(e);
+        }
+    }
+
+    /**
+     * Handle key up
+     */
+    handleKeyUp(e) {
+        if (e.code === 'Space') {
+            this.spacePressed = false;
+            this.updateCursor();
+            return;
+        }
+
+        if (this.currentTool) {
+            this.currentTool.onKeyUp(e);
+        }
+    }
+
+    /**
+     * Zoom at a specific screen position
+     */
+    zoomAt(screenX, screenY, factor) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = screenX - rect.left;
+        const mouseY = screenY - rect.top;
+
+        // World position before zoom
+        const worldBefore = {
+            x: (mouseX - this.camera.offsetX) / this.camera.zoom,
+            y: (mouseY - this.camera.offsetY) / this.camera.zoom
+        };
+
+        // Apply zoom
+        const newZoom = Math.max(this.minZoom, Math.min(this.maxZoom, this.camera.zoom * factor));
+        this.camera.zoom = newZoom;
+
+        // World position after zoom
+        const worldAfter = {
+            x: (mouseX - this.camera.offsetX) / this.camera.zoom,
+            y: (mouseY - this.camera.offsetY) / this.camera.zoom
+        };
+
+        // Adjust offset to keep world position under cursor
+        this.camera.offsetX += (worldAfter.x - worldBefore.x) * this.camera.zoom;
+        this.camera.offsetY += (worldAfter.y - worldBefore.y) * this.camera.zoom;
+
+        this.updateZoomIndicator();
+        this.render();
+    }
+
+    /**
+     * Reset view to default
+     */
+    resetView() {
+        this.camera.offsetX = 0;
+        this.camera.offsetY = 0;
+        this.camera.zoom = 1.0;
+        this.updateZoomIndicator();
+        this.render();
+    }
+
+    /**
+     * Convert screen coordinates to world coordinates
+     */
+    screenToWorld(screenX, screenY) {
+        const rect = this.canvas.getBoundingClientRect();
+        const x = (screenX - rect.left - this.camera.offsetX) / this.camera.zoom;
+        const y = (screenY - rect.top - this.camera.offsetY) / this.camera.zoom;
+        return { x, y };
+    }
+
+    /**
+     * Convert world coordinates to screen coordinates
+     */
+    worldToScreen(worldX, worldY) {
+        const rect = this.canvas.getBoundingClientRect();
+        const x = worldX * this.camera.zoom + this.camera.offsetX + rect.left;
+        const y = worldY * this.camera.zoom + this.camera.offsetY + rect.top;
+        return { x, y };
+    }
+
+    /**
+     * Get visible area in world coordinates
+     */
+    getViewBounds() {
+        const topLeft = this.screenToWorld(0, 0);
+        const bottomRight = this.screenToWorld(this.canvas.width, this.canvas.height);
+        return {
+            minX: topLeft.x,
+            minY: topLeft.y,
+            maxX: bottomRight.x,
+            maxY: bottomRight.y
+        };
+    }
+
+    /**
+     * Set current tool
+     */
+    setTool(toolName) {
+        if (this.currentTool) {
+            this.currentTool.deactivate();
+        }
+
+        this.currentTool = this.tools[toolName] || null;
+
+        if (this.currentTool) {
+            this.currentTool.activate();
+        }
+
+        this.updateToolButtons();
+        this.updateCursor();
+        this.updateStatusBar();
+        this.render();
+    }
+
+    /**
+     * Update tool button states
+     */
+    updateToolButtons() {
+        document.querySelectorAll('.tool-btn').forEach(btn => {
+            const tool = btn.dataset.tool;
+            btn.classList.toggle('active', this.currentTool && this.currentTool.name === tool);
+        });
+    }
+
+    /**
+     * Update cursor based on current state
+     */
+    updateCursor() {
+        if (this.spacePressed || this.isPanning) {
+            this.canvas.style.cursor = this.isPanning ? 'grabbing' : 'grab';
+        } else if (this.currentTool) {
+            this.canvas.style.cursor = this.currentTool.getCursor();
+        } else {
+            this.canvas.style.cursor = 'default';
+        }
+    }
+
+    /**
+     * Update status bar text
+     */
+    updateStatusBar() {
+        const statusEl = document.getElementById('status-text');
+        if (statusEl && this.currentTool) {
+            statusEl.textContent = this.currentTool.getStatusText();
+        }
+    }
+
+    /**
+     * Update zoom indicator
+     */
+    updateZoomIndicator() {
+        const zoomEl = document.getElementById('zoom-indicator');
+        if (zoomEl) {
+            zoomEl.textContent = `Zoom: ${Math.round(this.camera.zoom * 100)}%`;
+        }
+    }
+
+    /**
+     * Select an object
+     */
+    selectObject(obj) {
+        this.selectedObject = obj;
+        this.render();
+    }
+
+    /**
+     * Deselect current object
+     */
+    deselectObject() {
+        this.selectedObject = null;
+        this.render();
+    }
+
+    /**
+     * Delete selected object
+     */
+    deleteSelected() {
+        if (!this.selectedObject) return;
+
+        if (this.selectedObject === 'outer') {
+            this.mapData.outerPoly = [];
+        } else {
+            this.mapData.removeObject(this.selectedObject);
+        }
+
+        this.selectedObject = null;
+        this.navmesh = null;
+        this.render();
+    }
+
+    /**
+     * Bake NavMesh
+     */
+    bake() {
+        if (!this.mapData.hasOuterPoly()) {
+            alert('Please draw an outer area first.');
+            return;
+        }
+
+        try {
+            // Get outer polygon (ensure counter-clockwise)
+            let outer = [...this.mapData.outerPoly];
+            if (this.signedArea(outer) < 0) {
+                outer.reverse();
+            }
+
+            // Step 1: Resolve building overlaps
+            const buildingPolygons = this.mapData.buildings.map(b => ({
+                id: b.id,
+                vertices: b.getVertices()
+            }));
+
+            const overlapResult = this.geometry.resolveAllOverlaps(buildingPolygons);
+
+            // Check for errors
+            if (overlapResult.errors.length > 0) {
+                const errorMessages = overlapResult.errors.map(e =>
+                    `Buildings ${e.ids.join(' and ')}: ${e.error}`
+                ).join('\n');
+                alert('Cannot bake NavMesh due to invalid overlaps:\n\n' + errorMessages);
+                return;
+            }
+
+            // Step 2: Validate wall connections
+            const validationResult = this.geometry.validateWallConnections(
+                this.mapData.walls,
+                this.mapData
+            );
+
+            if (!validationResult.valid) {
+                const errorMessages = validationResult.errors.map(e =>
+                    `Wall ${e.wallId} (${e.endpoint}): ${e.error}`
+                ).join('\n');
+                console.warn('Wall connection validation warnings:\n' + errorMessages);
+                // Don't block baking, just warn - some connections may still work partially
+            }
+
+            // Step 3: Prepare polygon data for processing
+            // Note: Vertex/edge opening for wall connections is now handled directly
+            // in processConnectedGroup via buildMergedPolygonWithWalls
+            const obstaclePolygons = this.mapData.obstacles.map(o => ({
+                id: o.id,
+                vertices: o.getVertices()
+            }));
+
+            // Buildings and obstacles for fallback merge path
+            const modifiedBuildings = overlapResult.resolved;
+            const modifiedObstacles = obstaclePolygons;
+
+            // Step 4: Find connected groups and merge their geometries
+            const connectedGroups = this.geometry.findConnectedGroups(
+                this.mapData.walls,
+                this.mapData.buildings,
+                this.mapData.obstacles
+            );
+
+            // Step 5: Process groups and generate holes
+            const holes = [];
+            const obstacleGroups = []; // For export: groups of elements that form obstacles
+            const debugMergeComponents = []; // For debug: separate components before merging
+
+            // Track which elements have been processed
+            const processedBuildings = new Set();
+            const processedObstacles = new Set();
+            const processedWalls = new Set();
+
+            // Process each connected group
+            for (const group of connectedGroups) {
+                const groupResult = this.geometry.processConnectedGroup(
+                    group,
+                    this.mapData,
+                    modifiedBuildings,
+                    modifiedObstacles
+                );
+
+                // Add holes from this group
+                holes.push(...groupResult.holes);
+
+                // Store debug components if available
+                if (groupResult.debugComponents) {
+                    debugMergeComponents.push({
+                        buildingPolygon: groupResult.debugComponents.buildingPolygon,
+                        wallPolygons: groupResult.debugComponents.wallPolygons,
+                        mergedPolygon: groupResult.holes[0] // The merged result
+                    });
+                }
+
+                // Track processed elements
+                for (const buildingId of group.buildings) {
+                    processedBuildings.add(buildingId);
+                }
+                for (const obstacleId of group.obstacles) {
+                    processedObstacles.add(obstacleId);
+                }
+                for (const wallId of group.walls) {
+                    processedWalls.add(wallId);
+                }
+
+                // Store group info for export
+                obstacleGroups.push({
+                    elements: groupResult.elements,
+                    merged: groupResult.merged,
+                    connectsToOuter: group.connectsToOuter
+                });
+            }
+
+            // Add any unconnected (isolated) elements as separate holes
+            for (const building of modifiedBuildings) {
+                if (!processedBuildings.has(building.id)) {
+                    const vertices = building.vertices.map(v => ({ x: v.x, y: v.y }));
+                    if (this.signedArea(vertices) > 0) {
+                        vertices.reverse();
+                    }
+                    holes.push(vertices);
+                    obstacleGroups.push({
+                        elements: [{ type: 'building', id: building.id }],
+                        merged: false,
+                        connectsToOuter: false
+                    });
+                }
+            }
+
+            for (const obstacle of modifiedObstacles) {
+                if (!processedObstacles.has(obstacle.id)) {
+                    const vertices = obstacle.vertices.map(v => ({ x: v.x, y: v.y }));
+                    if (this.signedArea(vertices) > 0) {
+                        vertices.reverse();
+                    }
+                    holes.push(vertices);
+                    // Obstacles are non-destructible, don't add to obstacleGroups
+                }
+            }
+
+            for (const wall of this.mapData.walls) {
+                if (!processedWalls.has(wall.id)) {
+                    const quads = wall.toQuadrilaterals(this.mapData);
+                    for (let i = 0; i < quads.length; i++) {
+                        const quad = quads[i];
+                        if (this.signedArea(quad) > 0) {
+                            quad.reverse();
+                        }
+                        holes.push(quad);
+                    }
+                    obstacleGroups.push({
+                        elements: [{ type: 'wall', id: wall.id }],
+                        merged: false,
+                        connectsToOuter: false
+                    });
+                }
+            }
+
+            // Store holes for debug visualization
+            this.debugHoles = holes.map(h => h.map(v => ({ x: v.x, y: v.y })));
+            console.log('Computed holes for debug:', this.debugHoles);
+
+            // Store merge components for debug visualization
+            this.debugMergeComponents = debugMergeComponents;
+            console.log('Debug merge components:', this.debugMergeComponents);
+
+            // Step 6: Compute navmesh
+            const result = this.geometry.computeNavMeshWithTriangles(outer, holes);
+            this.navmesh = result;
+
+            // Store data for export
+            this.resolvedBuildings = modifiedBuildings;
+            this.obstacleGroups = obstacleGroups;
+
+            // Display stats
+            const stats = this.geometry.calculateStats(result.merged);
+            this.displayStats(stats, result.triangles.length);
+
+            this.render();
+        } catch (err) {
+            console.error('Bake error:', err);
+            alert('Error generating NavMesh: ' + err.message);
+        }
+    }
+
+    /**
+     * Get all holes using pre-modified polygon data
+     * @param {Array} modifiedBuildings - Modified building polygons
+     * @param {Array} modifiedObstacles - Modified obstacle polygons
+     * @returns {Array<Array<{x,y}>>}
+     */
+    getHolesWithModifiedPolygons(modifiedBuildings, modifiedObstacles) {
+        const holes = [];
+
+        // Add modified obstacle vertices as holes (non-destructible)
+        for (const obstacle of modifiedObstacles) {
+            const vertices = obstacle.vertices.map(v => ({ x: v.x, y: v.y }));
+            // Ensure clockwise winding for holes
+            if (this.signedArea(vertices) > 0) {
+                vertices.reverse();
+            }
+            holes.push(vertices);
+        }
+
+        // Add modified building vertices as holes
+        for (const building of modifiedBuildings) {
+            const vertices = building.vertices.map(v => ({ x: v.x, y: v.y }));
+            // Ensure clockwise winding for holes
+            if (this.signedArea(vertices) > 0) {
+                vertices.reverse();
+            }
+            holes.push(vertices);
+        }
+
+        // Add wall quadrilaterals as holes (one per subdivision)
+        // Pass mapData to allow vertex snap lookups
+        for (const wall of this.mapData.walls) {
+            const quads = wall.toQuadrilaterals(this.mapData);
+            for (const quad of quads) {
+                if (quad.length >= 3) {
+                    // Ensure clockwise winding for holes
+                    if (this.signedArea(quad) > 0) {
+                        quad.reverse();
+                    }
+                    holes.push(quad);
+                }
+            }
+        }
+
+        return holes;
+    }
+
+    /**
+     * Calculate signed area
+     */
+    signedArea(poly) {
+        let area = 0;
+        for (let i = 0; i < poly.length; i++) {
+            const j = (i + 1) % poly.length;
+            area += poly[i].x * poly[j].y;
+            area -= poly[j].x * poly[i].y;
+        }
+        return area / 2;
+    }
+
+    /**
+     * Display statistics
+     */
+    displayStats(stats, triangleCount) {
+        const panel = document.getElementById('stats-panel');
+        if (panel) {
+            panel.classList.remove('hidden');
+            document.getElementById('stat-count').textContent = stats.count;
+            document.getElementById('stat-triangles').textContent = triangleCount;
+            document.getElementById('stat-min-area').textContent = stats.minArea.toFixed(2) + ' px²';
+            document.getElementById('stat-max-area').textContent = stats.maxArea.toFixed(2) + ' px²';
+            document.getElementById('stat-avg-area').textContent = stats.avgArea.toFixed(2) + ' px²';
+        }
+    }
+
+    /**
+     * Hide statistics panel
+     */
+    hideStats() {
+        const panel = document.getElementById('stats-panel');
+        if (panel) {
+            panel.classList.add('hidden');
+        }
+    }
+
+    /**
+     * Clear all data
+     */
+    clear() {
+        this.mapData.clear();
+        this.selectedObject = null;
+        this.navmesh = null;
+        this.obstacleGroups = null;
+        this.resolvedBuildings = null;
+        this.hideStats();
+        this.render();
+    }
+
+    /**
+     * Clear only the navmesh, keep the map intact
+     */
+    clearNavmesh() {
+        this.navmesh = null;
+        this.obstacleGroups = null;
+        this.resolvedBuildings = null;
+        this.hideStats();
+        this.render();
+    }
+
+    /**
+     * Export map to JSON
+     */
+    exportMap() {
+        if (!this.mapData.hasOuterPoly()) {
+            alert('Please draw a map first.');
+            return;
+        }
+
+        const data = this.mapData.toJSON();
+        this.downloadJson(data, 'map.json');
+    }
+
+    /**
+     * Export NavMesh to JSON
+     * Includes navmesh polygons, static obstacles, and destructible obstacle groups
+     */
+    exportNavMesh() {
+        if (!this.navmesh) {
+            alert('Please bake the NavMesh first.');
+            return;
+        }
+
+        // NavMesh format: array of convex polygons
+        const navMeshPolygons = this.navmesh.merged.map((poly, idx) => ({
+            id: `nav_${idx}`,
+            vertices: poly.map(v => ({ x: v.x, y: v.y }))
+        }));
+
+        // Static obstacles (non-destructible) - from obstacles array
+        const staticObstacles = this.mapData.obstacles.map(obstacle => ({
+            id: obstacle.id,
+            vertices: obstacle.getVertices().map(v => ({ x: v.x, y: v.y })),
+            destructible: false
+        }));
+
+        // Destructible obstacle groups - buildings and walls that can be destroyed
+        const destructibleGroups = [];
+
+        if (this.obstacleGroups) {
+            for (let i = 0; i < this.obstacleGroups.length; i++) {
+                const group = this.obstacleGroups[i];
+
+                // Skip groups that only contain obstacles (they're non-destructible)
+                const hasDestructible = group.elements.some(e =>
+                    e.type === 'building' || e.type === 'wall' || e.type === 'wall_segment'
+                );
+                if (!hasDestructible) continue;
+
+                // Get the geometries for each element in the group
+                const elements = [];
+                for (const elem of group.elements) {
+                    if (elem.type === 'building') {
+                        const building = this.mapData.getBuildingById(elem.id);
+                        if (building) {
+                            elements.push({
+                                type: 'building',
+                                id: elem.id,
+                                vertices: building.getVertices().map(v => ({ x: v.x, y: v.y }))
+                            });
+                        }
+                    } else if (elem.type === 'wall') {
+                        const wall = this.mapData.getWallById(elem.id);
+                        if (wall) {
+                            const quads = wall.toQuadrilaterals(this.mapData);
+                            elements.push({
+                                type: 'wall',
+                                id: elem.id,
+                                segments: quads.map(q => q.map(v => ({ x: v.x, y: v.y })))
+                            });
+                        }
+                    } else if (elem.type === 'wall_segment') {
+                        // Individual wall segment (part of merged group)
+                        const wall = this.mapData.getWallById(elem.id);
+                        if (wall) {
+                            const quads = wall.toQuadrilaterals(this.mapData);
+                            if (elem.segmentIndex < quads.length) {
+                                elements.push({
+                                    type: 'wall_segment',
+                                    id: elem.id,
+                                    segmentIndex: elem.segmentIndex,
+                                    vertices: quads[elem.segmentIndex].map(v => ({ x: v.x, y: v.y }))
+                                });
+                            }
+                        }
+                    }
+                }
+
+                destructibleGroups.push({
+                    groupId: `group_${i}`,
+                    merged: group.merged,
+                    connectsToPerimeter: group.connectsToOuter,
+                    elements: elements
+                });
+            }
+        }
+
+        // Export data structure
+        const data = {
+            version: 1,
+            navMesh: {
+                polygons: navMeshPolygons,
+                triangleCount: this.navmesh.triangles.length
+            },
+            staticObstacles: staticObstacles,
+            destructibleGroups: destructibleGroups,
+            metadata: {
+                totalNavPolygons: navMeshPolygons.length,
+                totalStaticObstacles: staticObstacles.length,
+                totalDestructibleGroups: destructibleGroups.length,
+                exportDate: new Date().toISOString()
+            }
+        };
+
+        this.downloadJson(data, 'navmesh.json');
+    }
+
+    /**
+     * Load map from JSON
+     */
+    loadMap(json) {
+        try {
+            this.mapData.fromJSON(json);
+            this.selectedObject = null;
+            this.navmesh = null;
+            this.hideStats();
+            this.render();
+        } catch (err) {
+            console.error('Load error:', err);
+            alert('Error loading map: ' + err.message);
+        }
+    }
+
+    /**
+     * Download data as JSON file
+     */
+    downloadJson(data, filename) {
+        const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data, null, 2));
+        const anchor = document.createElement('a');
+        anchor.setAttribute('href', dataStr);
+        anchor.setAttribute('download', filename);
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+    }
+
+    /**
+     * Render the editor
+     */
+    render() {
+        this.renderer.render();
+        this.updateStatusBar();
+    }
+
+    /**
+     * Resize canvas to fit container
+     */
+    resize() {
+        this.renderer.resize();
+    }
+
+    /**
+     * Toggle snap
+     */
+    setSnapEnabled(enabled) {
+        this.snapEnabled = enabled;
+        if (!enabled) {
+            this.snapPoint = null;
+        }
+        this.render();
+    }
+
+    /**
+     * Toggle snap to edge
+     */
+    setSnapToEdgeEnabled(enabled) {
+        this.snapToEdgeEnabled = enabled;
+        if (!enabled) {
+            this.edgeSnapInfo = null;
+        }
+        this.render();
+    }
+
+    /**
+     * Toggle snap to grid
+     */
+    setGridSnapEnabled(enabled) {
+        this.gridSnapEnabled = enabled;
+        this.render();
+    }
+
+    /**
+     * Set grid size for snap
+     */
+    setGridSize(size) {
+        this.gridSize = Math.max(8, Math.min(128, size)); // Clamp between 5 and 200
+        this.render();
+    }
+
+    /**
+     * Toggle triangle display
+     */
+    setShowTriangles(show) {
+        this.showTriangles = show;
+        this.render();
+    }
+
+    /**
+     * Toggle debug holes visualization
+     */
+    setShowHolesDebug(show) {
+        this.showHolesDebug = show;
+        this.render();
+    }
+
+    /**
+     * Toggle debug merge components visualization
+     */
+    setShowMergeComponentsDebug(show) {
+        this.showMergeComponentsDebug = show;
+        this.render();
+    }
+
+    /**
+     * Show properties dialog for an object
+     */
+    showPropertiesDialog(obj) {
+        if (!obj || !obj.type) return;
+
+        const overlay = document.getElementById('dialog-overlay');
+        const titleEl = document.getElementById('dialog-title');
+        const contentEl = document.getElementById('dialog-content');
+        const okBtn = document.getElementById('dialog-ok');
+        const cancelBtn = document.getElementById('dialog-cancel');
+
+        if (!overlay || !contentEl) return;
+
+        let properties = {};
+
+        if (obj.type === 'building') {
+            titleEl.textContent = 'Building Properties';
+            properties = {
+                posX: { label: 'Position X', value: obj.position.x, step: 1 },
+                posY: { label: 'Position Y', value: obj.position.y, step: 1 },
+                rotation: { label: 'Rotation (deg)', value: (obj.rotation * 180 / Math.PI), step: 1 },
+                scaleX: { label: 'Scale X', value: obj.scaleX, step: 1, min: 1 },
+                scaleY: { label: 'Scale Y', value: obj.scaleY, step: 1, min: 1 },
+                sides: { label: 'Sides', value: obj.sides, step: 1, min: 3, max: 12 }
+            };
+        } else if (obj.type === 'wall') {
+            titleEl.textContent = 'Wall Properties';
+            properties = {
+                thickness: { label: 'Thickness', value: obj.thickness, step: 1, min: 2 },
+                maxSegmentLength: { label: 'Max Segment Length', value: obj.maxSegmentLength, step: 1, min: 5 }
+            };
+        }
+
+        // Build form
+        contentEl.innerHTML = '';
+        for (const [key, prop] of Object.entries(properties)) {
+            const row = document.createElement('div');
+            row.className = 'dialog-row';
+
+            const label = document.createElement('label');
+            label.textContent = prop.label;
+            label.setAttribute('for', `prop-${key}`);
+
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.id = `prop-${key}`;
+            input.name = key;
+            input.value = prop.value;
+            if (prop.step) input.step = prop.step;
+            if (prop.min !== undefined) input.min = prop.min;
+            if (prop.max !== undefined) input.max = prop.max;
+
+            row.appendChild(label);
+            row.appendChild(input);
+            contentEl.appendChild(row);
+        }
+
+        // OK handler
+        const handleOk = () => {
+            if (obj.type === 'building') {
+                obj.position.x = parseFloat(document.getElementById('prop-posX').value) || 0;
+                obj.position.y = parseFloat(document.getElementById('prop-posY').value) || 0;
+                obj.rotation = (parseFloat(document.getElementById('prop-rotation').value) || 0) * Math.PI / 180;
+                obj.scaleX = parseFloat(document.getElementById('prop-scaleX').value) || 50;
+                obj.scaleY = parseFloat(document.getElementById('prop-scaleY').value) || 50;
+                obj.sides = parseInt(document.getElementById('prop-sides').value) || 4;
+            } else if (obj.type === 'wall') {
+                obj.thickness = parseFloat(document.getElementById('prop-thickness').value) || 10;
+                obj.maxSegmentLength = parseFloat(document.getElementById('prop-maxSegmentLength').value) || 30;
+            }
+
+            this.navmesh = null;
+            overlay.classList.add('hidden');
+            okBtn.removeEventListener('click', handleOk);
+            cancelBtn.removeEventListener('click', handleCancel);
+            this.render();
+        };
+
+        const handleCancel = () => {
+            overlay.classList.add('hidden');
+            okBtn.removeEventListener('click', handleOk);
+            cancelBtn.removeEventListener('click', handleCancel);
+        };
+
+        okBtn.addEventListener('click', handleOk);
+        cancelBtn.addEventListener('click', handleCancel);
+
+        // Show dialog
+        overlay.classList.remove('hidden');
+    }
+}

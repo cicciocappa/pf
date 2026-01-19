@@ -1,0 +1,42 @@
+{
+  "version": 3,
+  "outer": [
+    {
+      "x": 142,
+      "y": 85
+    },
+    {
+      "x": 1256,
+      "y": 119
+    },
+    {
+      "x": 1297,
+      "y": 870
+    },
+    {
+      "x": 145,
+      "y": 809
+    }
+  ],
+  "buildings": [],
+  "walls": [
+    {
+      "id": "wall_1768741379950_5zqjrcpu5",
+      "points": [
+        {
+          "x": 356,
+          "y": 301
+        },
+        {
+          "x": 769,
+          "y": 556
+        }
+      ],
+      "thickness": 60,
+      "maxSegmentLength": 50,
+      "startSnap": null,
+      "endSnap": null
+    }
+  ],
+  "obstacles": []
+}

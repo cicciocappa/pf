@@ -47,14 +47,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('btn-export').addEventListener('click', () => {
-        editor.exportJson();
+    document.getElementById('btn-export-map').addEventListener('click', () => {
+        editor.exportMap();
+    });
+
+    document.getElementById('btn-export-navmesh').addEventListener('click', () => {
+        const skipMerge = document.getElementById('chk-skip-merge').checked;
+        editor.exportNavMesh(skipMerge);
+    });
+
+    document.getElementById('btn-load-map').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (data.outer) {
+                        editor.loadMap(data);
+                        document.getElementById('status').innerText = 'Map loaded';
+                    } else {
+                        alert("Invalid map file: missing 'outer' property");
+                    }
+                } catch (err) {
+                    alert("Error parsing map file: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+        // Reset input per permettere di ricaricare lo stesso file
+        e.target.value = '';
     });
 
     // Helper to update UI state
     function setMode(modeId, btnElement) {
         document.querySelectorAll('#controls button').forEach(b => {
-            if (b.id !== 'btn-bake' && b.id !== 'btn-clear' && b.id !== 'btn-export') {
+            if (b.id !== 'btn-bake' && b.id !== 'btn-clear' &&
+                b.id !== 'btn-export-map' && b.id !== 'btn-export-navmesh') {
                 b.classList.remove('active');
             }
         });
