@@ -100,7 +100,8 @@ export class MapData {
      * @param {Obstacle} obstacle
      */
     addObstacle(obstacle) {
-        this.obstacles.push(obstacle);
+        if (!obstacle.id) obstacle.id = `obs_${this.nextId++}`;
+        this.obstacles.set(obstacle.id, obstacle);
     }
 
     /**
@@ -109,19 +110,14 @@ export class MapData {
      */
     removeObstacle(obstacleOrId) {
         const id = typeof obstacleOrId === 'string' ? obstacleOrId : obstacleOrId.id;
-        const index = this.obstacles.findIndex(o => o.id === id);
-        if (index !== -1) {
-            this.obstacles.splice(index, 1);
-            return true;
-        }
-        return false;
+        return this.obstacles.delete(id);
     }
 
     /**
      * Get obstacle by ID
      */
     getObstacleById(id) {
-        return this.obstacles.find(o => o.id === id);
+        return this.obstacles.get(id);
     }
 
     /**
@@ -131,24 +127,26 @@ export class MapData {
      * @returns {Building|Wall|Obstacle|null}
      */
     findObjectAt(x, y) {
-        // Check buildings first (on top)
-        for (let i = this.buildings.length - 1; i >= 0; i--) {
-            if (this.buildings[i].containsPoint(x, y)) {
-                return this.buildings[i];
+        // Iterate in reverse for z-index (top to bottom)
+        // Convert to array to reverse
+        const buildings = Array.from(this.buildings.values());
+        for (let i = buildings.length - 1; i >= 0; i--) {
+            if (buildings[i].containsPoint(x, y)) {
+                return buildings[i];
             }
         }
 
-        // Then check walls
-        for (let i = this.walls.length - 1; i >= 0; i--) {
-            if (this.walls[i].containsPoint(x, y)) {
-                return this.walls[i];
+        const walls = Array.from(this.walls.values());
+        for (let i = walls.length - 1; i >= 0; i--) {
+            if (walls[i].containsPoint(x, y)) {
+                return walls[i];
             }
         }
 
-        // Then check obstacles
-        for (let i = this.obstacles.length - 1; i >= 0; i--) {
-            if (this.obstacles[i].containsPoint(x, y)) {
-                return this.obstacles[i];
+        const obstacles = Array.from(this.obstacles.values());
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            if (obstacles[i].containsPoint(x, y)) {
+                return obstacles[i];
             }
         }
 
@@ -159,7 +157,7 @@ export class MapData {
      * Get all objects (buildings, walls, and obstacles)
      */
     getAllObjects() {
-        return [...this.buildings, ...this.walls, ...this.obstacles];
+        return [...this.buildings.values(), ...this.walls.values(), ...this.obstacles.values()];
     }
 
     /**
@@ -232,7 +230,7 @@ export class MapData {
                     targetEdgeId: edge.edgeId, // <--- Usiamo l'ID!
                     distance: Math.sqrt(result.distSq)
                 };
-                
+
             }
         }
         return nearest;
@@ -466,11 +464,15 @@ export class MapData {
 
                 // Aggiunta degli edge (linea centrale per snap tra muri)
                 if (i < w.points.length - 1) {
+                    const p1 = w.points[i];
+                    const p2 = w.points[i + 1];
+
                     this._cachedEdges.push({
-                        p1: w.points[i],
-                        p2: w.points[i + 1],
+                        p1: p1,
+                        p2: p2,
                         type: 'wall',
-                        ownerId: w.id
+                        ownerId: w.id,
+                        edgeId: `e_${p1.id}` // Memorizziamo l'ID stabile dell'edge
                     });
                 }
             }

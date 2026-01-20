@@ -47,7 +47,7 @@ export class WallTool extends Tool {
         if (event.button === 0) {
             // Left click - add point
             const snapResult = this.getSnappedPoint(x, y);
-           
+
             const point = snapResult.point;
 
             // If this is the first point, store start snap info
@@ -166,11 +166,11 @@ export class WallTool extends Tool {
         // If no vertex snap, try edge snap
         if (!vertexSnap && this.editor.snapToEdgeEnabled) {
             const edgeResult = this.editor.mapData.findNearestEdge(x, y, threshold);
-            
+
             if (edgeResult) {
                 point = { ...edgeResult.point };
                 edgeSnap = edgeResult;
-                
+
             }
         }
 
@@ -231,10 +231,17 @@ export class WallTool extends Tool {
                 this.editor.history.save();
             }
 
+            // 1. Generiamo punti con ID persistenti
+            const pointsWithIds = this.points.map((p, index) => ({
+                id: `p_${Date.now()}_${index}`, // ID unico universale
+                x: p.x,
+                y: p.y
+            }));
+
             // 2. Creazione del muro semplificato (senza logica di snap interna)
             const wall = new Wall({
                 id: this.editor.mapData.generateId('wall'),
-                points: this.points.map(p => ({ ...p })),
+                points: pointsWithIds,
                 thickness: this.thickness,
                 maxSegmentLength: this.maxSegmentLength
             });
@@ -242,7 +249,8 @@ export class WallTool extends Tool {
             // 3. Aggiunta alla mappa
             this.editor.mapData.addWall(wall);
 
-           
+            console.log("muro completato con le seguenti info di snap", this.startSnapInfo, this.endSnapInfo);
+
             if (this.startSnapInfo) {
                 this.registerConnection(wall.id, 'start', this.startSnapInfo);
             }
@@ -276,9 +284,9 @@ export class WallTool extends Tool {
      * Converte le informazioni di snap del Tool in una connessione formale nel Manager
      */
     registerConnection(wallId, wallEnd, snapInfo) {
-        
+
         console.log(wallId, wallEnd, snapInfo);
-        
+
         const connManager = this.editor.mapData.connectionManager;
         let type = '';
 
@@ -297,7 +305,6 @@ export class WallTool extends Tool {
             }
         }
 
-        console.log("aggiungo", snapInfo);
 
         if (type) {
             connManager.add({
@@ -351,26 +358,26 @@ export class WallTool extends Tool {
      * Draw markers showing where snaps are active
      */
     drawSnapMarkers(ctx) {
-    const zoom = this.editor.camera.zoom;
-    const snap = this.currentSnapInfo;
-    if (!snap || !this.previewPoint) return;
+        const zoom = this.editor.camera.zoom;
+        const snap = this.currentSnapInfo;
+        if (!snap || !this.previewPoint) return;
 
-    ctx.save();
-    ctx.lineWidth = 2 / zoom;
-    ctx.strokeStyle = snap.vertexIndex !== undefined ? '#00ff00' : '#00ffff';
+        ctx.save();
+        ctx.lineWidth = 2 / zoom;
+        ctx.strokeStyle = snap.vertexIndex !== undefined ? '#00ff00' : '#00ffff';
 
-    ctx.beginPath();
-    if (snap.vertexIndex !== undefined) {
-        // Cerchio per i vertici
-        ctx.arc(this.previewPoint.x, this.previewPoint.y, 8 / zoom, 0, Math.PI * 2);
-    } else {
-        // Rombo/Quadrato per gli edge
-        const s = 6 / zoom;
-        ctx.rect(this.previewPoint.x - s, this.previewPoint.y - s, s * 2, s * 2);
+        ctx.beginPath();
+        if (snap.vertexIndex !== undefined) {
+            // Cerchio per i vertici
+            ctx.arc(this.previewPoint.x, this.previewPoint.y, 8 / zoom, 0, Math.PI * 2);
+        } else {
+            // Rombo/Quadrato per gli edge
+            const s = 6 / zoom;
+            ctx.rect(this.previewPoint.x - s, this.previewPoint.y - s, s * 2, s * 2);
+        }
+        ctx.stroke();
+        ctx.restore();
     }
-    ctx.stroke();
-    ctx.restore();
-}
 
     getStatusText() {
         let snapStatus = '';

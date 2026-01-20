@@ -1,8 +1,15 @@
+import { Geometry } from "../geometry.js";
+
 export class Obstacle {
     constructor(options = {}) {
         this.id = options.id;
         this.vertices = options.vertices || []; // Array of {x, y}
         this.type = 'obstacle';
+    }
+
+    containsPoint(x, y) {
+        // Utilizziamo i vertici correnti (quelli eventualmente modificati dai bevel)
+        return Geometry.isPointInPolygon(x, y, this.vertices);
     }
 
     /**

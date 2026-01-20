@@ -44,7 +44,10 @@ export class SelectTool extends Tool {
             this.dragStartMouse = { x, y };
         } else {
             // Clic nel vuoto
-            if (!isShift) this.editor.selection.clear();
+            if (!isShift) {
+                this.editor.selection.clear();
+                this.editor.selectedObject = null;
+            }
 
             this.isMarquee = true;
             this.marqueeStart = { x, y };
@@ -98,6 +101,18 @@ export class SelectTool extends Tool {
         this.editor.render();
     }
 
+    onDoubleClick(x, y, event) {
+        const obj = this.editor.mapData.findObjectAt(x, y);
+        if (obj) {
+            // Ensure one object is selected for properties
+            this.editor.selection.clear();
+            this.editor.selection.add(obj);
+            this.editor.selectedObject = obj;
+
+            this.editor.showPropertiesDialog(obj);
+        }
+    }
+
     _performMarqueeSelection() {
         const xMin = Math.min(this.marqueeStart.x, this.marqueeEnd.x);
         const xMax = Math.max(this.marqueeStart.x, this.marqueeEnd.x);
@@ -108,7 +123,7 @@ export class SelectTool extends Tool {
         found.forEach(obj => this.editor.selection.add(obj));
     }
 
-    draw(ctx) {
+    drawPreview(ctx) {
         if (this.isMarquee) {
             ctx.strokeStyle = '#0078d7';
             ctx.fillStyle = 'rgba(0, 120, 215, 0.2)';
@@ -215,6 +230,10 @@ export class SelectTool extends Tool {
 
     // ... getStatusText() aggiornato per mostrare il numero di oggetti selezionati
     getStatusText() {
+        if (this.editor.selection && this.editor.selection.size > 1) {
+            return `Selected: ${this.editor.selection.size} objects | Drag to move | DEL to delete`;
+        }
+
         if (this.editor.selectedObject) {
             const obj = this.editor.selectedObject;
             if (obj.type === 'building') {

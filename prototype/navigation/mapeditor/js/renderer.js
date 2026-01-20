@@ -48,6 +48,15 @@ export class Renderer {
     }
 
     /**
+     * Helper check if object is selected
+     */
+    isSelected(obj) {
+        if (this.editor.selectedObject === obj) return true;
+        if (this.editor.selection && this.editor.selection.has(obj)) return true;
+        return false;
+    }
+
+    /**
      * Clear and redraw everything
      */
     render() {
@@ -199,7 +208,7 @@ export class Renderer {
         if (poly.length < 2) return;
 
         const ctx = this.ctx;
-        const selected = this.editor.selectedObject === 'outer';
+        const selected = this.isSelected('outer');
 
         // Draw filled polygon
         if (poly.length >= 3) {
@@ -245,7 +254,7 @@ export class Renderer {
     drawObstacle(obstacle) {
         const ctx = this.ctx;
         const vertices = obstacle.getVertices();
-        const selected = this.editor.selectedObject === obstacle;
+        const selected = this.isSelected(obstacle);
 
         if (vertices.length < 3) return;
 
@@ -291,7 +300,7 @@ export class Renderer {
     drawBuilding(building) {
         const ctx = this.ctx;
         const vertices = building.getVertices();
-        const selected = this.editor.selectedObject === building;
+        const selected = this.isSelected(building);
 
         if (vertices.length < 3) return;
 
@@ -334,7 +343,7 @@ export class Renderer {
     drawWall(wall) {
         const ctx = this.ctx;
         const zoom = this.editor.camera.zoom;
-        const selected = this.editor.selectedObject === wall;
+        const selected = this.isSelected(wall);
 
         // Se il muro non ha unità (es. meno di 2 punti), non disegniamo nulla
         if (!wall.units || wall.units.length === 0) return;

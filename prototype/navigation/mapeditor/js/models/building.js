@@ -1,4 +1,5 @@
 import { GeometryFactory } from "../factories/geometry-factory.js";
+import { Geometry } from "../geometry.js";
 
 export class Building {
     /**
@@ -23,6 +24,11 @@ export class Building {
         if (this.vertices.length === 0) {
             this.regenerateBase();
         }
+    }
+
+    containsPoint(x, y) {
+        // Utilizziamo i vertici correnti (quelli eventualmente modificati dai bevel)
+        return Geometry.isPointInPolygon(x, y, this.vertices);
     }
 
     /**

@@ -1,3 +1,4 @@
+import { Geometry } from "../geometry.js";
 /**
  * Wall - Rappresenta una polilinea con spessore suddivisa in unità distruttibili
  */
@@ -24,6 +25,16 @@ export class Wall {
         }
         this.units = this.generateDestructibleUnits();
     }
+
+    containsPoint(x, y) {
+    // Il muro contiene il punto se lo contiene almeno una delle sue unità
+    for (const unit of this.units) {
+        if (Geometry.isPointInPolygon(x, y, unit.vertices)) {
+            return true;
+        }
+    }
+    return false;
+}
 
     /**
      * Genera la mesh suddivisa in base a maxSegmentLength.

@@ -4,79 +4,43 @@ export class ConnectionManager {
     }
 
     add(conn) {
+
         this.mapData.connections.push(conn);
         this.mapData.updateAllGeometry();
     }
 
-    resolveAll() {
-        // Ordine di risoluzione suggerito:
-        // 1. Unioni di edifici (Caso 5-6)
-        // 2. Connessioni Muro-Edificio (Caso 1-2)
-        // 3. Connessioni Muro-Muro (Caso 3-4)
 
+
+    resolveAll() {
+        // 1. Reset degli override sui muri (pulisce lo stato del frame precedente)
         this.mapData.walls.forEach(w => {
             w.startCapOverride = null;
             w.endCapOverride = null;
         });
 
-        // Ordiniamo le connessioni per indice decrescente
-        const sortedConnections = [...this.mapData.connections].sort((a, b) =>
-            (b.targetVertexIndex || 0) - (a.targetVertexIndex || 0)
-        );
-
-        for (const conn of sortedConnections) {
+        // 2. Processiamo ogni connessione linearmente
+        for (const conn of this.mapData.connections) {
+            console.log("checking", conn);
             switch (conn.type) {
-                case 'WALL_TO_BUILDING_EDGE':
-                    this._resolveWallToBuildingEdge(conn);
-                    break;
                 case 'WALL_TO_BUILDING_VERTEX':
-                    this._resolveWallToBuildingVertex(conn);
+                    const bldgV = this.mapData.buildings.get(conn.targetId);
+                    if (bldgV) this._resolveWallToBuildingVertex(conn, bldgV);
                     break;
-                case 'WALL_TO_WALL_END':
-                    this._resolveWallToWallEnd(conn);
+
+                case 'WALL_TO_BUILDING_EDGE':
+                    const bldgE = this.mapData.buildings.get(conn.targetId);
+                    if (bldgE) this._resolveWallToBuildingEdge(conn, bldgE);
                     break;
+
                 case 'WALL_TO_WALL_EDGE':
-                    this._resolveWallToWallEdge(conn);
+                    console.log("cerco", conn.targetWallId);
+                    console.log(this.mapData.walls);
+                    const targetWall = this.mapData.walls.get(conn.targetId);
+                    console.log(targetWall);
+                    if (targetWall) this._resolveWallToWallEdge(conn, targetWall);
                     break;
-                // ... altri casi
             }
         }
-    }
-
-    resolveAll() {
-        // 1. Reset temporaneo degli override dei muri
-        this.mapData.walls.forEach(w => {
-            w.startCapOverride = null;
-            w.endCapOverride = null;
-        });
-
-        // 2. Raggruppiamo le connessioni per edificio
-        const connectionsByBuilding = new Map();
-        this.mapData.connections.forEach(conn => {
-            if (!connectionsByBuilding.has(conn.targetId)) {
-                connectionsByBuilding.set(conn.targetId, []);
-            }
-            connectionsByBuilding.get(conn.targetId).push(conn);
-        });
-
-        // 3. Processiamo ogni edificio in modo isolato
-        connectionsByBuilding.forEach((conns, bldgId) => {
-            const bldg = this.mapData.buildings.get(bldgId);
-            if (!bldg) return;
-
-            // --- CRUCIALE: Ordine decrescente per evitare lo slittamento degli indici ---
-            const sortedConns = conns.sort((a, b) => b.targetVertexIndex - a.targetVertexIndex);
-
-            for (const conn of sortedConns) {
-                if (conn.type === 'WALL_TO_BUILDING_VERTEX') {
-                    this._resolveWallToBuildingVertex(conn, bldg);
-                }
-                // Aggiungi qui gli altri casi (EDGE, ecc.)
-                if (conn.type === 'WALL_TO_BUILDING_EDGE') {
-                    this._resolveWallToBuildingEdge(conn, bldg);
-                }
-            }
-        });
     }
 
     _resolveWallToBuildingVertex(conn, bldg) {
@@ -165,7 +129,7 @@ export class ConnectionManager {
 
 
     _resolveWallToBuildingEdge(conn, bldg) {
-        console.log(conn); 
+
         const wall = this.mapData.walls.get(conn.wallId);
         if (!wall || !bldg || !conn.targetEdgeId) return;
 
@@ -221,25 +185,34 @@ export class ConnectionManager {
         }
     }
 
-    _resolveWallToWallEdge(conn) {
+    _resolveWallToWallEdge(conn, targetWall) {
+       
         const incomingWall = this.mapData.walls.get(conn.wallId);
-        const targetWall = this.mapData.walls.get(conn.targetWallId);
-        const unit = targetWall.units[conn.targetSegmentIndex];
 
-        if (!unit) return;
+        
+        // 1. Troviamo il segmento del muro bersaglio tramite l'ID persistente
+        const p1Idx = targetWall.points.findIndex(p => `e_${p.id}` === conn.targetEdgeId);
 
-        // 1. Identifichiamo l'edge laterale della unit bersaglio
-        // Una unit ha vertici: 0:L1, 1:R1, 2:R2, 3:L2
-        // Lato sinistro: 0 -> 3 | Lato destro: 1 -> 2
-        const vIdx1 = conn.targetSide === 'left' ? 0 : 1;
-        const vIdx2 = conn.targetSide === 'left' ? 3 : 2;
+        if (p1Idx === -1) return;
+       
+        const tP1 = targetWall.points[p1Idx];
+        const tP2 = targetWall.points[p1Idx + 1];
 
-        const v1 = unit.vertices[vIdx1];
-        const v2 = unit.vertices[vIdx2];
-        const edgeDir = this._normalize({ x: v2.x - v1.x, y: v2.y - v1.y });
+        // 2. Calcoliamo la "linea di confine" del muro bersaglio
+        // È una linea parallela alla polilinea centrale, spostata di halfThickness
+        const tDir = this._normalize({ x: tP2.x - tP1.x, y: tP2.y - tP1.y });
+        const tNormal = { x: -tDir.y, y: tDir.x };
+        const tHalfThickness = targetWall.thickness / 2;
 
-        // 2. Dati del muro entrante
-        const isStart = conn.wallEnd === 'start';
+        // Scegliamo il lato (sinistro o destro)
+        const sideSign = (conn.targetSide === 'left') ? 1 : -1;
+        const boundaryPoint = {
+            x: tP1.x + tNormal.x * tHalfThickness * sideSign,
+            y: tP1.y + tNormal.y * tHalfThickness * sideSign
+        };
+
+        // 3. Proiettiamo il muro entrante su questa linea di confine
+        const isStart = (conn.wallEnd === 'start');
         const pA = isStart ? incomingWall.points[0] : incomingWall.points[incomingWall.points.length - 1];
         const pB = isStart ? incomingWall.points[1] : incomingWall.points[incomingWall.points.length - 2];
 
@@ -250,28 +223,21 @@ export class ConnectionManager {
         const pL = { x: pA.x + wallNormal.x * hT, y: pA.y + wallNormal.y * hT };
         const pR = { x: pA.x - wallNormal.x * hT, y: pA.y - wallNormal.y * hT };
 
-        // 3. Intersezione
-        const intersectL = this._lineLineIntersection(pL, projDir, v1, edgeDir);
-        const intersectR = this._lineLineIntersection(pR, projDir, v1, edgeDir);
+        // Intersezione tra i lati del muro entrante e la linea di confine del bersaglio
+        const intersectL = this._lineLineIntersection(pL, projDir, boundaryPoint, tDir);
+        const intersectR = this._lineLineIntersection(pR, projDir, boundaryPoint, tDir);
 
         if (intersectL && intersectR) {
-            // --- TRASFORMAZIONE IN PENTAGONO ---
-            // Inseriamo i due nuovi vertici nell'array della unit
-            // L'indice di inserimento dipende dal lato e dal winding
-            const insertIdx = conn.targetSide === 'left' ? 3 : 2;
-            unit.vertices.splice(insertIdx, 0, intersectL, intersectR);
-
-            // 4. Override per il muro entrante (stessa logica dell'edificio)
-            const override = isStart ?
-                { left: intersectR, right: intersectL } :
-                { left: intersectL, right: intersectR };
-
+            // Applichiamo l'override (usando la tua correzione per l'effetto farfalla)
             if (isStart) {
-                incomingWall.startCapOverride = override;
-                incomingWall.points[0] = { x: (intersectL.x + intersectR.x) / 2, y: (intersectL.y + intersectR.y) / 2 };
+                incomingWall.startCapOverride = { left: intersectR, right: intersectL };
+                // Il punto centrale del cap ora è esattamente sul bordo del muro bersaglio
+                incomingWall.points[0].x = (intersectL.x + intersectR.x) / 2;
+                incomingWall.points[0].y = (intersectL.y + intersectR.y) / 2;
             } else {
-                incomingWall.endCapOverride = override;
-                incomingWall.points[incomingWall.points.length - 1] = { x: (intersectL.x + intersectR.x) / 2, y: (intersectL.y + intersectR.y) / 2 };
+                incomingWall.endCapOverride = { left: intersectL, right: intersectR };
+                incomingWall.points[incomingWall.points.length - 1].x = (intersectL.x + intersectR.x) / 2;
+                incomingWall.points[incomingWall.points.length - 1].y = (intersectL.y + intersectR.y) / 2;
             }
         }
     }
