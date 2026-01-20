@@ -51,8 +51,8 @@ export class Renderer {
      * Helper check if object is selected
      */
     isSelected(obj) {
-        if (this.editor.selectedObject === obj) return true;
-        if (this.editor.selection && this.editor.selection.has(obj)) return true;
+        
+        if (this.editor.selection.has(obj)) return true;
         return false;
     }
 

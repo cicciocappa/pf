@@ -12,10 +12,7 @@ export class SelectTool extends Tool {
         this.marqueeStart = { x: 0, y: 0 };
         this.marqueeEnd = { x: 0, y: 0 };
 
-        // Usiamo un Set nell'editor per gestire la selezione multipla
-        if (!this.editor.selection) {
-            this.editor.selection = new Set();
-        }
+
     }
 
     onMouseDown(x, y, event) {
@@ -25,35 +22,24 @@ export class SelectTool extends Tool {
         const isShift = event.shiftKey;
 
         if (obj) {
-            // Gestione selezione multipla con Shift
-            if (isShift) {
-                if (this.editor.selection.has(obj)) {
-                    this.editor.selection.delete(obj);
-                } else {
-                    this.editor.selection.add(obj);
-                }
+            // Se l'oggetto è già selezionato e usiamo Shift, lo togliamo
+            if (isShift && this.editor.selection.has(obj)) {
+                this.editor.deselectObject(obj);
             } else {
-                // Se clicco su un oggetto non selezionato senza Shift, resetto e seleziono solo questo
-                if (!this.editor.selection.has(obj)) {
-                    this.editor.selection.clear();
-                    this.editor.selection.add(obj);
-                }
+                // Altrimenti lo selezioniamo (append = true se Shift è premuto)
+                this.editor.selectObject(obj, isShift);
             }
 
-            this.isDragging = true;
-            this.dragStartMouse = { x, y };
+            // Se dopo il click l'oggetto è selezionato, iniziamo il drag
+            if (this.editor.selection.has(obj)) {
+                this.isDragging = true;
+                this.dragStartMouse = { x, y };
+            }
         } else {
-            // Clic nel vuoto
-            if (!isShift) {
-                this.editor.selection.clear();
-                this.editor.selectedObject = null;
-            }
-
+            if (!isShift) this.editor.deselectObject();
             this.isMarquee = true;
             this.marqueeStart = { x, y };
-            this.marqueeEnd = { x, y };
         }
-
         this.editor.render();
     }
 

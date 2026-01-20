@@ -40,7 +40,7 @@ export class MapEditor {
         this.spacePressed = false;
 
         // Selection
-        this.selectedObject = null;
+        this.selection = new Set();
 
         // Snap to vertices
         this.snapEnabled = false;
@@ -206,7 +206,7 @@ export class MapEditor {
             e.preventDefault();
             return;
         }
-      
+
         // Nel metodo handleKeyDown(e)
         if (e.ctrlKey || e.metaKey) {
             if (e.key === 'z' || e.key === 'Z') {
@@ -415,19 +415,40 @@ export class MapEditor {
     }
 
     /**
-     * Select an object
-     */
-    selectObject(obj) {
-        this.selectedObject = obj;
+      * Seleziona un oggetto. 
+      * @param { Object } obj L'oggetto da selezionare
+     * @param { boolean } append Se true, aggiunge alla selezione attuale.Se false, rimpiazza.
+      */
+    selectObject(obj, append = false) {
+        if (!append) {
+            this.selection.clear();
+        }
+        if (obj) {
+            this.selection.add(obj);
+        }
         this.render();
     }
 
     /**
-     * Deselect current object
+     * Deseleziona tutto o un oggetto specifico
      */
-    deselectObject() {
-        this.selectedObject = null;
+    deselectObject(obj = null) {
+        if (obj) {
+            this.selection.delete(obj);
+        } else {
+            this.selection.clear();
+        }
         this.render();
+    }
+
+    /**
+     * Metodo di utility per ottenere "l'ultimo" o "l'unico" oggetto selezionato
+     * (Utile per il pannello proprietà che mostra un oggetto alla volta)
+     */
+    getSelectedObject() {
+        if (this.selection.size === 0) return null;
+        // Ritorna l'ultimo elemento aggiunto al Set
+        return Array.from(this.selection).pop();
     }
 
     /**
