@@ -170,15 +170,37 @@ export class MapData {
     /**
      * Remove object by ID (any type)
      */
+    /**
+  * Rimuove un oggetto dalla mappa e pulisce le connessioni orfane
+  */
     removeObject(obj) {
+        if (!obj) return;
+
+        // 1. Rimuoviamo l'oggetto dalla sua collezione specifica
         if (obj.type === 'building') {
-            return this.removeBuilding(obj);
+            this.buildings.delete(obj.id);
         } else if (obj.type === 'wall') {
-            return this.removeWall(obj);
+            this.walls.delete(obj.id);
         } else if (obj.type === 'obstacle') {
-            return this.removeObstacle(obj);
+            this.obstacles.delete(obj.id);
         }
-        return false;
+
+        // 2. GARBAGE COLLECTION DELLE CONNESSIONI
+        // Filtriamo le connessioni: manteniamo solo quelle che NON coinvolgono l'ID rimosso
+        const initialConnectionsCount = this.connections.length;
+        this.connections = this.connections.filter(conn => {
+            const isSource = conn.wallId === obj.id;
+            const isTarget = conn.targetId === obj.id || conn.targetWallId === obj.id;
+            return !isSource && !isTarget;
+        });
+
+        if (this.connections.length < initialConnectionsCount) {
+            console.log(`Pulizia: rimosse ${initialConnectionsCount - this.connections.length} connessioni orfane.`);
+        }
+
+        // 3. Notifichiamo la necessità di aggiornare cache e geometria
+        this._needsUpdate = true;
+        this.updateAllGeometry();
     }
 
     /**
@@ -280,8 +302,10 @@ export class MapData {
             if (dSq < minDistSq) {
                 minDistSq = dSq;
                 // Restituiamo una copia dell'oggetto in cache per non sporcare l'originale
+               
                 nearest = {
                     point: v.ref,            // Riferimento al punto {x, y} reale
+                    id: v.id,           // <--- AGGIUNTO: targetVertexId per la connessione
                     type: v.type,            // 'building', 'wall', etc.
                     targetId: v.ownerId,
                     vertexIndex: v.index,    // Indice nel poligono originale
@@ -455,6 +479,7 @@ export class MapData {
 
                 this._cachedVertices.push({
                     ref: w.points[i],
+                    id: w.points[i].id,
                     type: 'wall',
                     ownerId: w.id,
                     index: i,

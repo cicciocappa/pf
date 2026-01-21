@@ -1,18 +1,14 @@
 import { Tool } from './tool.js';
 
 export class SelectTool extends Tool {
-    constructor(editor) {
+   constructor(editor) {
         super(editor);
         this.name = 'select';
-
         this.isDragging = false;
         this.isMarquee = false;
-
         this.dragStartMouse = { x: 0, y: 0 };
         this.marqueeStart = { x: 0, y: 0 };
         this.marqueeEnd = { x: 0, y: 0 };
-
-
     }
 
     onMouseDown(x, y, event) {
@@ -22,24 +18,35 @@ export class SelectTool extends Tool {
         const isShift = event.shiftKey;
 
         if (obj) {
-            // Se l'oggetto è già selezionato e usiamo Shift, lo togliamo
-            if (isShift && this.editor.selection.has(obj)) {
-                this.editor.deselectObject(obj);
+            // --- CASO A: CLICK SU OGGETTO ---
+            this.isMarquee = false;
+
+            // Se l'oggetto non è ancora selezionato
+            if (!this.editor.selection.has(obj)) {
+                if (!isShift) this.editor.selection.clear();
+                this.editor.selection.add(obj);
             } else {
-                // Altrimenti lo selezioniamo (append = true se Shift è premuto)
-                this.editor.selectObject(obj, isShift);
+                // Se è già selezionato e premo Shift, lo deseleziono (toggle)
+                if (isShift) {
+                    this.editor.selection.delete(obj);
+                    this.editor.render();
+                    return; // Non iniziamo il drag se abbiamo appena rimosso l'oggetto
+                }
             }
 
-            // Se dopo il click l'oggetto è selezionato, iniziamo il drag
-            if (this.editor.selection.has(obj)) {
-                this.isDragging = true;
-                this.dragStartMouse = { x, y };
-            }
+            this.isDragging = true;
+            this.dragStartMouse = { x, y };
         } else {
-            if (!isShift) this.editor.deselectObject();
+            // --- CASO B: CLICK NEL VUOTO ---
+            this.isDragging = false;
             this.isMarquee = true;
             this.marqueeStart = { x, y };
+            this.marqueeEnd = { x, y };
+
+            // Se non premo Shift, deseleziono tutto iniziando un nuovo rettangolo
+            if (!isShift) this.editor.selection.clear();
         }
+
         this.editor.render();
     }
 
@@ -47,25 +54,22 @@ export class SelectTool extends Tool {
         if (this.isDragging) {
             const dx = x - this.dragStartMouse.x;
             const dy = y - this.dragStartMouse.y;
-            this.dragStartMouse = { x, y }; // Aggiorniamo per il prossimo delta
+            this.dragStartMouse = { x, y };
 
-            // Muoviamo tutti gli oggetti selezionati
+            // Sposta tutto il gruppo selezionato
             for (const obj of this.editor.selection) {
-                if (obj.type === 'building') {
+                if (obj.type === 'building' || obj.type === 'obstacle') {
                     obj.position.x += dx;
                     obj.position.y += dy;
                 } else if (obj.type === 'wall') {
-                    for (const point of obj.points) {
-                        point.x += dx;
-                        point.y += dy;
+                    for (const p of obj.points) {
+                        p.x += dx;
+                        p.y += dy;
                     }
                 }
             }
-
-            // IMPORTANTE: Ricalcoliamo le connessioni (Bevel) durante il drag
             this.editor.mapData.updateAllGeometry();
-        }
-
+        } 
         else if (this.isMarquee) {
             this.marqueeEnd = { x, y };
         }
@@ -87,6 +91,25 @@ export class SelectTool extends Tool {
         this.editor.render();
     }
 
+    onWheel(x, y, deltaY, event) {
+        if (this.editor.selection.size === 0) return;
+
+        // Shift + Wheel per ruotare il gruppo
+        if (event.shiftKey) {
+            if (this.editor.history) this.editor.history.save();
+
+            const angle = (deltaY > 0 ? -15 : 15) * Math.PI / 180;
+            const center = this._getSelectionCenter();
+
+            for (const obj of this.editor.selection) {
+                this._rotateObject(obj, center, angle);
+            }
+
+            this.editor.mapData.updateAllGeometry();
+            this.editor.render();
+            event.preventDefault();
+        }
+    }
     onDoubleClick(x, y, event) {
         const obj = this.editor.mapData.findObjectAt(x, y);
         if (obj) {
@@ -121,7 +144,10 @@ export class SelectTool extends Tool {
     }
 
     onKeyDown(event) {
-        if (event.key === 'Delete' || event.key === 'Backspace') {
+        const key = event.key.toLowerCase();
+
+        // 1. CANCELLAZIONE (Delete/Backspace)
+        if (key === 'delete' || key === 'backspace') {
             if (this.editor.selection.size > 0) {
                 if (this.editor.history) this.editor.history.save();
 
@@ -132,6 +158,15 @@ export class SelectTool extends Tool {
                 this.editor.mapData.updateAllGeometry();
                 this.editor.render();
             }
+            event.preventDefault();
+        }
+
+        // 2. SCOLLEGAMENTO (U - Unlink)
+        if (key === 'u') {
+            if (this.editor.selection.size > 1) {
+                this.unlinkSelectedObjects();
+            }
+            event.preventDefault();
         }
     }
 
@@ -155,10 +190,9 @@ export class SelectTool extends Tool {
             event.preventDefault();
         }
     }
-
     /**
-     * Calcola il centro geometrico di tutti gli oggetti selezionati
-     */
+       * Calcola il centro geometrico di tutti gli oggetti selezionati
+       */
     _getSelectionCenter() {
         let sumX = 0, sumY = 0, count = 0;
 
@@ -213,22 +247,58 @@ export class SelectTool extends Tool {
             }
         }
     }
+    /**
+ * Rimuove le connessioni tra gli oggetti attualmente selezionati (SelectTool)
+ */
+    unlinkSelectedObjects() {
+        const selection = this.editor.selection;
+        if (selection.size < 2) return;
+
+        // Creiamo un set di ID selezionati
+        const selectedIds = new Set(Array.from(selection).map(obj => obj.id));
+
+        // Verifichiamo se esistono connessioni tra questi oggetti prima di salvare l'history
+        const hasConnectionsToRemove = this.editor.mapData.connections.some(conn => {
+            const sourceInSelection = selectedIds.has(conn.wallId);
+            const targetInSelection = selectedIds.has(conn.targetId) || selectedIds.has(conn.targetWallId);
+            return sourceInSelection && targetInSelection;
+        });
+
+        if (hasConnectionsToRemove) {
+            // SALVATAGGIO HISTORY: Ora l'operazione è reversibile
+            if (this.editor.history) {
+                this.editor.history.save();
+            }
+
+            const initialCount = this.editor.mapData.connections.length;
+
+            this.editor.mapData.connections = this.editor.mapData.connections.filter(conn => {
+                const sourceSelected = selectedIds.has(conn.wallId);
+                const targetSelected = selectedIds.has(conn.targetId) || selectedIds.has(conn.targetWallId);
+                // Se entrambi i capi sono nella selezione, rimuoviamo (false)
+                return !(sourceSelected && targetSelected);
+            });
+
+            // Reset geometrico per riflettere lo stato "scollegato" (caps piatti e no bevel)
+            this.editor.mapData.updateAllGeometry();
+            this.editor.render();
+
+            console.log(`Unlinked ${initialCount - this.editor.mapData.connections.length} connections.`);
+        }
+    }
+
 
     // ... getStatusText() aggiornato per mostrare il numero di oggetti selezionati
     getStatusText() {
-        if (this.editor.selection && this.editor.selection.size > 1) {
-            return `Selected: ${this.editor.selection.size} objects | Drag to move | DEL to delete`;
-        }
-
-        if (this.editor.selectedObject) {
-            const obj = this.editor.selectedObject;
-            if (obj.type === 'building') {
-                return `Selected: Building (${obj.sides} sides) | Double-click to edit | DEL to delete`;
-            } else if (obj.type === 'wall') {
-                return `Selected: Wall (${obj.points.length} points) | Double-click to edit | DEL to delete`;
+        const count = this.editor.selection.size;
+        if (count > 0) {
+            let text = `Selected: ${count} objects | DEL to delete`;
+            if (count > 1) {
+                text += ` | U to unlink connections between them`;
             }
+            return text;
         }
-        return 'Click to select | Drag to move | Double-click to edit properties';
+        return 'Click to select | Shift+Click for multiple | Drag to move | Double-click for properties';
     }
 
     getCursor() {

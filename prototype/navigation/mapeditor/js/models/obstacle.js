@@ -13,6 +13,22 @@ export class Obstacle {
     }
 
     /**
+     * Calculate signed area of the polygon
+     * Positive = counter-clockwise, Negative = clockwise
+     * @returns {number}
+     */
+    signedArea() {
+        let area = 0;
+        const n = this.vertices.length;
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            area += this.vertices[i].x * this.vertices[j].y;
+            area -= this.vertices[j].x * this.vertices[i].y;
+        }
+        return area / 2;
+    }
+
+    /**
      * Serialize to JSON
      * @returns {Object}
      */

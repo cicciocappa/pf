@@ -8,6 +8,7 @@ import { BuildingTool } from './tools/building-tool.js';
 import { WallTool } from './tools/wall-tool.js';
 import { EditTool } from './tools/edit-tool.js';
 import { ObstacleTool } from './tools/obstacle-tool.js';
+ 
 
 /**
  * MapEditor - Main editor class
@@ -230,6 +231,7 @@ export class MapEditor {
                     this.setTool('select');
                     e.preventDefault();
                     return;
+                
                 case 'A':
                     this.setTool('draw-area');
                     e.preventDefault();

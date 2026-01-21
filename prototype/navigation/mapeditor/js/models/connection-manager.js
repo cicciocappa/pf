@@ -33,11 +33,11 @@ export class ConnectionManager {
                     break;
 
                 case 'WALL_TO_WALL_EDGE':
-                    console.log("cerco", conn.targetWallId);
-                    console.log(this.mapData.walls);
                     const targetWall = this.mapData.walls.get(conn.targetId);
-                    console.log(targetWall);
                     if (targetWall) this._resolveWallToWallEdge(conn, targetWall);
+                    break;
+                case 'WALL_TO_WALL_VERTEX':
+                    this._resolveWallToWallVertex(conn);
                     break;
             }
         }
@@ -186,15 +186,15 @@ export class ConnectionManager {
     }
 
     _resolveWallToWallEdge(conn, targetWall) {
-       
+
         const incomingWall = this.mapData.walls.get(conn.wallId);
 
-        
+
         // 1. Troviamo il segmento del muro bersaglio tramite l'ID persistente
         const p1Idx = targetWall.points.findIndex(p => `e_${p.id}` === conn.targetEdgeId);
 
         if (p1Idx === -1) return;
-       
+
         const tP1 = targetWall.points[p1Idx];
         const tP2 = targetWall.points[p1Idx + 1];
 
@@ -242,6 +242,68 @@ export class ConnectionManager {
         }
     }
 
+    _resolveWallToWallVertex(conn) {
+        let wallA = this.mapData.walls.get(conn.wallId);
+        let wallB = this.mapData.walls.get(conn.targetWallId);
+
+        // 1. Identifichiamo Target (più spesso) e Incoming (più sottile)
+        let target = wallA.thickness >= wallB.thickness ? wallA : wallB;
+        let incoming = wallA.thickness >= wallB.thickness ? wallB : wallA;
+
+        let targetEnd = (target === wallA) ? conn.wallEnd : conn.targetWallEnd;
+        let incomingEnd = (target === wallA) ? conn.targetWallEnd : conn.wallEnd;
+
+        // 2. Prendiamo i vertici della "faccia" del muro spesso (Target)
+        const targetCap = this._getWallCapVertices(target, targetEnd);
+        const v1 = targetCap.left;
+        const v2 = targetCap.right;
+        const edgeDir = this._normalize({ x: v2.x - v1.x, y: v2.y - v1.y });
+
+        // 3. Proiettiamo i lati del muro sottile sulla faccia di quello spesso
+        const isStartInc = (incomingEnd === 'start');
+        const pA = isStartInc ? incoming.points[0] : incoming.points[incoming.points.length - 1];
+        const pB = isStartInc ? incoming.points[1] : incoming.points[incoming.points.length - 2];
+
+        const projDir = this._normalize({ x: pA.x - pB.x, y: pA.y - pB.y });
+        const wallNormal = { x: -projDir.y, y: projDir.x };
+        const hT = incoming.thickness / 2;
+
+        const pL = { x: pA.x + wallNormal.x * hT, y: pA.y + wallNormal.y * hT };
+        const pR = { x: pA.x - wallNormal.x * hT, y: pA.y - wallNormal.y * hT };
+
+        const intersectL = this._lineLineIntersection(pL, projDir, v1, edgeDir);
+        const intersectR = this._lineLineIntersection(pR, projDir, v1, edgeDir);
+
+        if (intersectL && intersectR) {
+            // --- APPLICHIAMO SOLO L'OVERRIDE ---
+            // NON modifichiamo incoming.points[0]. 
+            // Il punto del backbone rimane nel centro del muro spesso.
+            const override = isStartInc ?
+                { left: intersectR, right: intersectL } :
+                { left: intersectL, right: intersectR };
+
+            if (isStartInc) incoming.startCapOverride = override;
+            else incoming.endCapOverride = override;
+        }
+    }
+
+    /**
+ * Helper per calcolare i vertici di un cap rettangolare standard
+ */
+    _getWallCapVertices(wall, end) {
+        const isStart = (end === 'start');
+        const pA = isStart ? wall.points[0] : wall.points[wall.points.length - 1];
+        const pB = isStart ? wall.points[1] : wall.points[wall.points.length - 2];
+
+        const dir = this._normalize({ x: pA.x - pB.x, y: pA.y - pB.y });
+        const norm = { x: -dir.y, y: dir.x };
+        const hT = wall.thickness / 2;
+
+        return {
+            left: { x: pA.x + norm.x * hT, y: pA.y + norm.y * hT },
+            right: { x: pA.x - norm.x * hT, y: pA.y - norm.y * hT }
+        };
+    }
 
     // --- Helpers Geometrici ---
 

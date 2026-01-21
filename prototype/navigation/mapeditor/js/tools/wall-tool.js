@@ -60,6 +60,7 @@ export class WallTool extends Tool {
                         vertexIndex: snapResult.vertexSnap.vertexIndex,
                         targetVertexId: snapResult.vertexSnap.point.id,
                         vertex: { ...snapResult.vertexSnap.point },
+                        isEndpoint: snapResult.vertexSnap.isEndpoint,
                         snapType: 'vertex'
                     };
                     // If snapping to wall endpoint, also store endpoint info
@@ -94,6 +95,7 @@ export class WallTool extends Tool {
                     vertexIndex: snapResult.vertexSnap.vertexIndex,
                     targetVertexId: snapResult.vertexSnap.point.id,
                     vertex: { ...snapResult.vertexSnap.point },
+                    isEndpoint: snapResult.vertexSnap.isEndpoint,
                     snapType: 'vertex'
                 };
                 if (snapResult.vertexSnap.isEndpoint) {
@@ -285,7 +287,7 @@ export class WallTool extends Tool {
      */
     registerConnection(wallId, wallEnd, snapInfo) {
 
-        console.log(wallId, wallEnd, snapInfo);
+        console.log(wallId, wallEnd, snapInfo.isEndpoint);
 
         const connManager = this.editor.mapData.connectionManager;
         let type = '';
@@ -295,7 +297,8 @@ export class WallTool extends Tool {
             if (snapInfo.type === 'building') {
                 type = 'WALL_TO_BUILDING_VERTEX'; // Caso 2
             } else if (snapInfo.type === 'wall' && snapInfo.isEndpoint) {
-                type = 'WALL_TO_WALL_END'; // Caso 4
+                type = 'WALL_TO_WALL_VERTEX'; // Caso 4
+                console.log("caso 4");
             }
         } else if (snapInfo.snapType === 'edge') {
             if (snapInfo.type === 'building') {
@@ -317,7 +320,9 @@ export class WallTool extends Tool {
                 targetVertexId: snapInfo.targetVertexId,
                 targetEdge: snapInfo.edge,
                 targetEdgeIndex: snapInfo.edgeIndex,
-                targetEdgeId: snapInfo.targetEdgeId
+                targetEdgeId: snapInfo.targetEdgeId,
+                targetWallId: snapInfo.targetId,
+                targetWallEnd: snapInfo.endpointType // 'start' o 'end'
             });
         }
     }
