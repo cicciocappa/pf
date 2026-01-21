@@ -243,7 +243,7 @@ export class Renderer {
      * Draw all obstacles (non-destructible)
      */
     drawObstacles() {
-        for (const obstacle of this.editor.mapData.obstacles) {
+        for (const obstacle of this.editor.mapData.obstacles.values()) {
             this.drawObstacle(obstacle);
         }
     }

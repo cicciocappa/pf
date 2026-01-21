@@ -92,7 +92,7 @@ export class DrawAreaTool extends Tool {
 
             // 2. SALVATAGGIO STORIA: Salviamo lo stato attuale prima della modifica
             if (this.editor.history) {
-                console.log("DBG: salvo l'area nello stack");
+             
                 this.editor.history.save();
             }
 

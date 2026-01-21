@@ -27,9 +27,8 @@ export class ConnectionManager {
                     if (bldgV) this._resolveWallToBuildingVertex(conn, bldgV);
                     break;
 
-                case 'WALL_TO_BUILDING_EDGE':
-                    const bldgE = this.mapData.buildings.get(conn.targetId);
-                    if (bldgE) this._resolveWallToBuildingEdge(conn, bldgE);
+                case 'WALL_TO_EDGE':
+                    this._resolveWallToEdge(conn);
                     break;
 
                 case 'WALL_TO_WALL_EDGE':
@@ -128,63 +127,57 @@ export class ConnectionManager {
 
 
 
-    _resolveWallToBuildingEdge(conn, bldg) {
+    _resolveWallToEdge(conn) {
+        console.log(conn);
+        const incomingWall = this.mapData.walls.get(conn.wallId);
+        let targetPoints = [];
 
-        const wall = this.mapData.walls.get(conn.wallId);
-        if (!wall || !bldg || !conn.targetEdgeId) return;
+        // 1. Recupero dei punti dell'oggetto target
+        if (conn.targetType === 'building') {
+            const b = this.mapData.buildings.get(conn.targetId);
+            if (b) targetPoints = b.vertices;
+        } else if (conn.targetType === 'obstacle') {
+            const o = this.mapData.obstacles.get(conn.targetId);
+            if (o) targetPoints = o.vertices;
+        } else if (conn.targetType === 'outer') {
+            targetPoints = this.mapData.outerPoly;
+        }
+        console.log(targetPoints);
+        if (targetPoints.length === 0) return;
 
-        // 1. TROVA IL VERTICE DI PARTENZA TRAMITE L'ID DELL'EDGE
-        const vIdx1 = bldg.vertices.findIndex(v => v.edgeId === conn.targetEdgeId);
-        if (vIdx1 === -1) return;
+        // 2. Troviamo l'indice attuale dell'edge tramite il suo ID persistente
+        const p1Idx = targetPoints.findIndex(p => `e_${p.id}` === conn.targetEdgeId);
+        if (p1Idx === -1) return;
 
-        // Il secondo vertice dell'edge è sempre il successivo nell'array "pulito"
-        const vIdx2 = (vIdx1 + 1) % bldg.vertices.length;
+        const p1 = targetPoints[p1Idx];
+        const p2 = targetPoints[(p1Idx + 1) % targetPoints.length];
 
-        const v1 = bldg.vertices[vIdx1];
-        const v2 = bldg.vertices[vIdx2];
+        // 3. Logica di proiezione (Identica per tutti)
+        const edgeDir = this._normalize({ x: p2.x - p1.x, y: p2.y - p1.y });
 
-        const edgeDir = this._normalize({ x: v2.x - v1.x, y: v2.y - v1.y });
+        const isStart = (conn.wallEnd === 'start');
+        const pA = isStart ? incomingWall.points[0] : incomingWall.points[incomingWall.points.length - 1];
+        const pB = isStart ? incomingWall.points[1] : incomingWall.points[incomingWall.points.length - 2];
 
-        const isStart = conn.wallEnd === 'start';
+        const projDir = this._normalize({ x: pA.x - pB.x, y: pA.y - pB.y });
+        const wallNormal = { x: -projDir.y, y: projDir.x };
+        const hT = incomingWall.thickness / 2;
 
-        // DETERMINIAMO IL SEGMENTO CORRETTO
-        // Se è l'inizio, il segmento va da p0 a p1.
-        // Se è la fine, il segmento va da p(n-1) a pn.
-        const p1 = isStart ? wall.points[0] : wall.points[wall.points.length - 2];
-        const p2 = isStart ? wall.points[1] : wall.points[wall.points.length - 1];
+        const pL = { x: pA.x + wallNormal.x * hT, y: pA.y + wallNormal.y * hT };
+        const pR = { x: pA.x - wallNormal.x * hT, y: pA.y - wallNormal.y * hT };
 
-        // Direzione reale del segmento (sempre concorde con l'ordine dei punti)
-        const segmentDir = this._normalize({ x: p2.x - p1.x, y: p2.y - p1.y });
-        const segmentNormal = { x: -segmentDir.y, y: segmentDir.x };
-        const halfThickness = wall.thickness / 2;
+        const intersectL = this._lineLineIntersection(pL, projDir, p1, edgeDir);
+        const intersectR = this._lineLineIntersection(pR, projDir, p1, edgeDir);
 
-        // Il punto che deve toccare l'edificio
-        const pTarget = isStart ? p1 : p2;
+        if (intersectL && intersectR) {
+            const override = isStart ?
+                { left: intersectR, right: intersectL } :
+                { left: intersectL, right: intersectR };
 
-        // Calcoliamo i punti laterali basandoci sulla normale del segmento
-        const leftLinePoint = { x: pTarget.x + segmentNormal.x * halfThickness, y: pTarget.y + segmentNormal.y * halfThickness };
-        const rightLinePoint = { x: pTarget.x - segmentNormal.x * halfThickness, y: pTarget.y - segmentNormal.y * halfThickness };
-
-        // Proiettiamo lungo la direzione del segmento
-        const leftIntersect = this._lineLineIntersection(leftLinePoint, segmentDir, v1, edgeDir);
-        const rightIntersect = this._lineLineIntersection(rightLinePoint, segmentDir, v1, edgeDir);
-
-        if (leftIntersect && rightIntersect) {
-            // Assegniamo l'override
-            const override = { left: leftIntersect, right: rightIntersect };
-
-            if (isStart) {
-                wall.startCapOverride = override;
-                p1.x = (leftIntersect.x + rightIntersect.x) / 2;
-                p1.y = (leftIntersect.y + rightIntersect.y) / 2;
-            } else {
-                wall.endCapOverride = override;
-                p2.x = (leftIntersect.x + rightIntersect.x) / 2;
-                p2.y = (leftIntersect.y + rightIntersect.y) / 2;
-            }
+            if (isStart) incomingWall.startCapOverride = override;
+            else incomingWall.endCapOverride = override;
         }
     }
-
     _resolveWallToWallEdge(conn, targetWall) {
 
         const incomingWall = this.mapData.walls.get(conn.wallId);

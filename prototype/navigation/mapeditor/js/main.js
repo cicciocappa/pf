@@ -19,6 +19,7 @@ function init() {
 
     // Create editor instance
     editor = new MapEditor(canvas);
+    //window.myeditor = editor;
 
     // Set default tool
     editor.setTool('select');

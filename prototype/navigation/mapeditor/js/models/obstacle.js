@@ -28,6 +28,26 @@ export class Obstacle {
         return area / 2;
     }
 
+    getVertices() {
+        return this.vertices;
+    }
+
+    getCenter() {
+        if (this.vertices.length === 0) {
+            return { x: 0, y: 0 };
+        }
+
+        let cx = 0, cy = 0;
+        for (const v of this.vertices) {
+            cx += v.x;
+            cy += v.y;
+        }
+        return {
+            x: cx / this.vertices.length,
+            y: cy / this.vertices.length
+        };
+    }
+
     /**
      * Serialize to JSON
      * @returns {Object}

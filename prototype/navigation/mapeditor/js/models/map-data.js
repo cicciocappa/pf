@@ -101,7 +101,9 @@ export class MapData {
      */
     addObstacle(obstacle) {
         if (!obstacle.id) obstacle.id = `obs_${this.nextId++}`;
+
         this.obstacles.set(obstacle.id, obstacle);
+        this._needsUpdate = true;
     }
 
     /**
@@ -208,7 +210,16 @@ export class MapData {
      * @param {Array<{x, y}>} points
      */
     setOuterPoly(points) {
-        this.outerPoly = points.map(p => ({ x: p.x, y: p.y }));
+        // Trasformiamo i semplici punti [x, y] in oggetti con ID
+        this.outerPoly = points.map((p, i) => ({
+            id: `p_outer_${Date.now()}_${i}`,
+            x: p.x,
+            y: p.y
+        }));
+        for (let i=0;i<this.outerPoly.length; i++) {
+            this.outerPoly[i].edgeId = `e_${this.outerPoly[i].id}`;
+        }
+        this._needsUpdate = true;
     }
 
     /**
@@ -302,7 +313,7 @@ export class MapData {
             if (dSq < minDistSq) {
                 minDistSq = dSq;
                 // Restituiamo una copia dell'oggetto in cache per non sporcare l'originale
-               
+
                 nearest = {
                     point: v.ref,            // Riferimento al punto {x, y} reale
                     id: v.id,           // <--- AGGIUNTO: targetVertexId per la connessione
@@ -424,6 +435,7 @@ export class MapData {
         this.nextId = 1;
         this._needsUpdate = true;
     }
+
     updateAllGeometry() {
         this.buildings.forEach(b => b.regenerateBase());
 

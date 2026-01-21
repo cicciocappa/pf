@@ -46,7 +46,13 @@
                     <span class="shortcut">E</span>
                 </button>
             </div>
-
+            <div class="toolbar-section">
+                <h3>Building</h3>
+                <div id="active-prefab-preview" onclick="togglePrefabModal()">
+                    <canvas id="prefab-icon" width="64" height="64"></canvas><br>
+                    <div id="prefab-name">Tower</div>
+                </div>
+            </div>
             <div class="toolbar-section">
                 <h3>Actions</h3>
                 <button id="btn-bake" class="action-btn primary">Bake NavMesh</button>

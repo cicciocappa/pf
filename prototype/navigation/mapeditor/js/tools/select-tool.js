@@ -1,7 +1,7 @@
 import { Tool } from './tool.js';
 
 export class SelectTool extends Tool {
-   constructor(editor) {
+    constructor(editor) {
         super(editor);
         this.name = 'select';
         this.isDragging = false;
@@ -58,10 +58,18 @@ export class SelectTool extends Tool {
 
             // Sposta tutto il gruppo selezionato
             for (const obj of this.editor.selection) {
-                if (obj.type === 'building' || obj.type === 'obstacle') {
+                if (obj.type === 'building') {
                     obj.position.x += dx;
                     obj.position.y += dy;
-                } else if (obj.type === 'wall') {
+                }
+                else if (obj.type === 'obstacle') {
+                    for (const v of obj.vertices) {
+                        v.x += dx;
+                        v.y += dy;
+                    }
+                }
+
+                else if (obj.type === 'wall') {
                     for (const p of obj.points) {
                         p.x += dx;
                         p.y += dy;
@@ -69,7 +77,7 @@ export class SelectTool extends Tool {
                 }
             }
             this.editor.mapData.updateAllGeometry();
-        } 
+        }
         else if (this.isMarquee) {
             this.marqueeEnd = { x, y };
         }
@@ -91,25 +99,7 @@ export class SelectTool extends Tool {
         this.editor.render();
     }
 
-    onWheel(x, y, deltaY, event) {
-        if (this.editor.selection.size === 0) return;
 
-        // Shift + Wheel per ruotare il gruppo
-        if (event.shiftKey) {
-            if (this.editor.history) this.editor.history.save();
-
-            const angle = (deltaY > 0 ? -15 : 15) * Math.PI / 180;
-            const center = this._getSelectionCenter();
-
-            for (const obj of this.editor.selection) {
-                this._rotateObject(obj, center, angle);
-            }
-
-            this.editor.mapData.updateAllGeometry();
-            this.editor.render();
-            event.preventDefault();
-        }
-    }
     onDoubleClick(x, y, event) {
         const obj = this.editor.mapData.findObjectAt(x, y);
         if (obj) {
@@ -176,7 +166,8 @@ export class SelectTool extends Tool {
 
         // Usiamo Shift + Wheel per la rotazione di gruppo
         if (event.shiftKey) {
-            const angle = (deltaY > 0 ? -15 : 15) * Math.PI / 180;
+            const deltaAngle = (event.ctrlKey || event.metaKey) ? 2 : 15;
+            const angle = (deltaY > 0 ? -deltaAngle : deltaAngle) * Math.PI / 180;
             const center = this._getSelectionCenter();
 
             if (this.editor.history) this.editor.history.save();

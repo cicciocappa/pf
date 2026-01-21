@@ -1,69 +1,34 @@
 import { Tool } from './tool.js';
 
-/**
- * EditTool - For editing vertices of shapes
- */
 export class EditTool extends Tool {
     constructor(editor) {
         super(editor);
         this.name = 'edit';
-
-        // Edit state
-        this.editingObject = null; // 'outer', Building, Wall, or Obstacle
-        this.vertices = []; // Reference to vertices array
-        this.selectedVertexIndex = -1;
-        this.selectedEdgeIndex = -1;
+        this.editingObject = null;
+        this.selectedVertexId = null; // Usiamo l'ID invece dell'indice
+        this.selectedEdgeId = null;
         this.isDragging = false;
-        this.dragOffset = { x: 0, y: 0 };
-
-        // Visual settings
         this.vertexRadius = 8;
-        this.edgeHitDistance = 10;
     }
 
-    activate() {
-        super.activate();
-        this.exitEditMode();
-    }
-
-    deactivate() {
-        super.deactivate();
-        this.exitEditMode();
-    }
-
-    /**
-     * Enter edit mode for an object
-     */
     enterEditMode(obj) {
-        this.editingObject = obj;
-        this.selectedVertexIndex = -1;
-        this.selectedEdgeIndex = -1;
-
-        if (obj === 'outer') {
-            this.vertices = this.editor.mapData.outerPoly;
-        } else if (obj.type === 'building') {
-            // For buildings, we edit the base vertices (before transform)
-            // We need to work with transformed vertices but update position/scale
-            this.vertices = obj.getVertices();
-        } else if (obj.type === 'wall') {
-            this.vertices = obj.points;
-        } else if (obj.type === 'obstacle') {
-            // For obstacles, we directly edit the vertices array
-            this.vertices = obj.vertices;
+        // Filtriamo gli edifici: non sono editabili a livello di vertice in questo sistema
+        if (obj && obj.type === 'building') {
+            console.log("Buildings can only be moved or rotated via Selection Tool.");
+            return;
         }
 
+        this.editingObject = obj;
+        this.selectedVertexId = null;
+        this.selectedEdgeId = null;
         this.editor.selectObject(obj);
         this.editor.render();
     }
 
-    /**
-     * Exit edit mode
-     */
     exitEditMode() {
         this.editingObject = null;
-        this.vertices = [];
-        this.selectedVertexIndex = -1;
-        this.selectedEdgeIndex = -1;
+        this.selectedVertexId = null;
+        this.selectedEdgeId = null;
         this.isDragging = false;
         this.editor.render();
     }
@@ -71,398 +36,154 @@ export class EditTool extends Tool {
     onMouseDown(x, y, event) {
         if (event.button !== 0) return;
 
-        const threshold = this.vertexRadius / this.editor.camera.zoom;
+        const zoom = this.editor.camera.zoom;
+        const threshold = this.vertexRadius / zoom;
 
-        // If already in edit mode
         if (this.editingObject) {
-            // Check if clicking on a vertex
-            const vertexIndex = this.findVertexAt(x, y, threshold);
-            if (vertexIndex !== -1) {
-                this.selectedVertexIndex = vertexIndex;
-                this.selectedEdgeIndex = -1;
-                this.isDragging = true;
-                this.dragOffset = {
-                    x: x - this.vertices[vertexIndex].x,
-                    y: y - this.vertices[vertexIndex].y
-                };
-                this.editor.render();
-                return;
+            const points = this._getEditingPoints();
+            
+            // 1. Check Vertici
+            for (const p of points) {
+                if (Math.hypot(p.x - x, p.y - y) < threshold) {
+                    this.selectedVertexId = p.id;
+                    this.selectedEdgeId = null;
+                    this.isDragging = true;
+                    return;
+                }
             }
 
-            // Check if clicking on an edge
-            const edgeIndex = this.findEdgeAt(x, y);
+            // 2. Check Edge (per inserimento nuovi punti)
+            const edgeIndex = this._findEdgeAt(x, y, points);
             if (edgeIndex !== -1) {
-                this.selectedEdgeIndex = edgeIndex;
-                this.selectedVertexIndex = -1;
+                this.selectedEdgeId = `e_${points[edgeIndex].id}`;
+                this.selectedVertexId = null;
                 this.editor.render();
                 return;
             }
-
-            // Click on empty space - exit edit mode and try to select something else
-            this.exitEditMode();
         }
 
-        // Not in edit mode - try to find object to edit
-        const hitObject = this.editor.mapData.findObjectAt(x, y);
-
-        if (hitObject) {
-            this.enterEditMode(hitObject);
-        } else if (this.isPointInOuterPoly(x, y)) {
-            // Clicked inside outer polygon area
-            this.enterEditMode('outer');
+        // Se non siamo in edit mode o abbiamo cliccato fuori, cerchiamo un nuovo oggetto
+        const hit = this.editor.mapData.findObjectAt(x, y);
+        if (hit && hit.type !== 'building') {
+            this.enterEditMode(hit);
+        } else {
+            this.exitEditMode();
         }
     }
 
     onMouseMove(x, y, event) {
-        if (this.isDragging && this.selectedVertexIndex !== -1) {
-            // Apply snap if enabled
-            let newPos = this.applySnapExcluding(x - this.dragOffset.x, y - this.dragOffset.y, this.selectedVertexIndex);
+        if (!this.isDragging || !this.selectedVertexId) return;
 
-            // Update vertex position
-            if (this.editingObject === 'outer') {
-                this.editor.mapData.outerPoly[this.selectedVertexIndex] = newPos;
-                this.vertices = this.editor.mapData.outerPoly;
-            } else if (this.editingObject.type === 'wall') {
-                this.editingObject.points[this.selectedVertexIndex] = newPos;
-                this.vertices = this.editingObject.points;
-            } else if (this.editingObject.type === 'building') {
-                // For buildings, moving vertices is complex - we'd need to recalculate
-                // the building parameters. For now, update the cached vertices for preview
-                this.vertices[this.selectedVertexIndex] = newPos;
-            } else if (this.editingObject.type === 'obstacle') {
-                // For obstacles, directly update the vertex
-                this.editingObject.vertices[this.selectedVertexIndex] = newPos;
-                this.vertices = this.editingObject.vertices;
+        const points = this._getEditingPoints();
+        const vertex = points.find(p => p.id === this.selectedVertexId);
+        
+        if (vertex) {
+            // Applichiamo lo Snap se attivo (escludendo se stessi)
+            let targetX = x;
+            let targetY = y;
+
+            if (this.editor.snapEnabled) {
+                const snap = this.editor.mapData.findNearestVertex(x, y, 15 / this.editor.camera.zoom);
+                if (snap && snap.id !== this.selectedVertexId) {
+                    targetX = snap.point.x;
+                    targetY = snap.point.y;
+                }
             }
 
-            // Invalidate navmesh
-            this.editor.navmesh = null;
+            vertex.x = targetX;
+            vertex.y = targetY;
+
+            // Ricalcoliamo tutta la geometria (connessioni incluse!)
+            this.editor.mapData.updateAllGeometry();
             this.editor.render();
         }
     }
 
-    onMouseUp(x, y, event) {
-        if (this.isDragging && this.editingObject && this.editingObject.type === 'building') {
-            // For buildings, we need to recalculate the building from the new vertices
-            // This is complex - for simplicity, we'll just update the position
-            // to the centroid of the new vertices
-            const centroid = this.calculateCentroid(this.vertices);
-            this.editingObject.position = centroid;
-            // Refresh vertices
-            this.vertices = this.editingObject.getVertices();
+    onMouseUp() {
+        if (this.isDragging && this.editor.history) {
+            this.editor.history.save();
         }
-
         this.isDragging = false;
     }
 
     onKeyDown(event) {
-        if (event.key === 'Escape') {
-            this.exitEditMode();
-            event.preventDefault();
-            return;
-        }
-
+        if (event.key === 'Escape') this.exitEditMode();
+        
         if (!this.editingObject) return;
 
-        // Delete vertex
-        if (event.key === 'Delete' && this.selectedVertexIndex !== -1) {
-            this.deleteSelectedVertex();
-            event.preventDefault();
-            return;
+        if (event.key === 'Delete' || event.key === 'Backspace') {
+            this._deleteVertex();
         }
-
-        // Insert vertex on edge
-        if (event.key === 'Insert' && this.selectedEdgeIndex !== -1) {
-            this.insertVertexOnEdge();
-            event.preventDefault();
-            return;
+        
+        if (event.key === 'i' || event.key === 'Insert') {
+            this._insertVertex(this.editor.lastMousePos); // Assumendo che l'editor tracci il mouse
         }
     }
 
-    /**
-     * Delete the selected vertex
-     */
-    deleteSelectedVertex() {
-        if (this.selectedVertexIndex === -1) return;
+    // --- HELPER METHODS ---
 
-        // Check minimum vertices
-        let minVertices = 3;
-        if (this.editingObject === 'outer') {
-            minVertices = 3;
-        } else if (this.editingObject.type === 'wall') {
-            minVertices = 2;
-        } else if (this.editingObject.type === 'obstacle') {
-            minVertices = 3;
-        } else if (this.editingObject.type === 'building') {
-            minVertices = 3;
-        }
-
-        if (this.vertices.length <= minVertices) {
-            return; // Can't delete - would make shape invalid
-        }
-
-        if (this.editingObject === 'outer') {
-            this.editor.mapData.outerPoly.splice(this.selectedVertexIndex, 1);
-            this.vertices = this.editor.mapData.outerPoly;
-        } else if (this.editingObject.type === 'wall') {
-            this.editingObject.points.splice(this.selectedVertexIndex, 1);
-            this.vertices = this.editingObject.points;
-        } else if (this.editingObject.type === 'obstacle') {
-            this.editingObject.vertices.splice(this.selectedVertexIndex, 1);
-            this.vertices = this.editingObject.vertices;
-        }
-        // Buildings: deleting vertices would change the polygon shape fundamentally
-        // For regular polygons, this doesn't make sense, so we skip it
-
-        this.selectedVertexIndex = -1;
-        this.editor.navmesh = null;
-        this.editor.render();
+    _getEditingPoints() {
+        if (!this.editingObject) return [];
+        if (this.editingObject === 'outer') return this.editor.mapData.outerPoly;
+        return this.editingObject.points || this.editingObject.vertices;
     }
 
-    /**
-     * Insert a vertex on the selected edge
-     */
-    insertVertexOnEdge() {
-        if (this.selectedEdgeIndex === -1) return;
+    _findEdgeAt(x, y, points) {
+        const threshold = 10 / this.editor.camera.zoom;
+        const isClosed = this.editingObject !== 'wall';
+        const limit = isClosed ? points.length : points.length - 1;
 
-        const i = this.selectedEdgeIndex;
-        const j = (i + 1) % this.vertices.length;
-
-        // For walls, j might be out of bounds if not closed
-        if (this.editingObject.type === 'wall' && i >= this.vertices.length - 1) {
-            return;
-        }
-
-        const midpoint = {
-            x: (this.vertices[i].x + this.vertices[j].x) / 2,
-            y: (this.vertices[i].y + this.vertices[j].y) / 2
-        };
-
-        if (this.editingObject === 'outer') {
-            this.editor.mapData.outerPoly.splice(j, 0, midpoint);
-            this.vertices = this.editor.mapData.outerPoly;
-        } else if (this.editingObject.type === 'wall') {
-            this.editingObject.points.splice(j, 0, midpoint);
-            this.vertices = this.editingObject.points;
-        } else if (this.editingObject.type === 'obstacle') {
-            this.editingObject.vertices.splice(j, 0, midpoint);
-            this.vertices = this.editingObject.vertices;
-        }
-        // Buildings: inserting vertices would change the polygon type, skip it
-
-        this.selectedEdgeIndex = -1;
-        this.selectedVertexIndex = j;
-        this.editor.navmesh = null;
-        this.editor.render();
-    }
-
-    /**
-     * Find vertex at position
-     */
-    findVertexAt(x, y, threshold) {
-        for (let i = 0; i < this.vertices.length; i++) {
-            const v = this.vertices[i];
-            const dist = Math.sqrt((v.x - x) ** 2 + (v.y - y) ** 2);
-            if (dist <= threshold) {
-                return i;
-            }
+        for (let i = 0; i < limit; i++) {
+            const p1 = points[i];
+            const p2 = points[(i + 1) % points.length];
+            const dist = this._pointToSegmentDist(x, y, p1, p2);
+            if (dist < threshold) return i;
         }
         return -1;
     }
 
-    /**
-     * Find edge at position
-     */
-    findEdgeAt(x, y) {
-        const threshold = this.edgeHitDistance / this.editor.camera.zoom;
-        // Walls are open polylines, others are closed polygons
-        const numEdges = (this.editingObject.type === 'wall') ?
-            this.vertices.length - 1 : this.vertices.length;
-
-        for (let i = 0; i < numEdges; i++) {
-            const j = (i + 1) % this.vertices.length;
-            const dist = this.pointToSegmentDistance(
-                x, y,
-                this.vertices[i].x, this.vertices[i].y,
-                this.vertices[j].x, this.vertices[j].y
-            );
-            if (dist <= threshold) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Calculate distance from point to line segment
-     */
-    pointToSegmentDistance(px, py, x1, y1, x2, y2) {
-        const dx = x2 - x1;
-        const dy = y2 - y1;
-        const lengthSq = dx * dx + dy * dy;
-
-        if (lengthSq === 0) {
-            return Math.sqrt((px - x1) ** 2 + (py - y1) ** 2);
-        }
-
-        let t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
+    _pointToSegmentDist(px, py, p1, p2) {
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const l2 = dx * dx + dy * dy;
+        if (l2 === 0) return Math.hypot(px - p1.x, py - p1.y);
+        let t = ((px - p1.x) * dx + (py - p1.y) * dy) / l2;
         t = Math.max(0, Math.min(1, t));
-
-        const nearestX = x1 + t * dx;
-        const nearestY = y1 + t * dy;
-
-        return Math.sqrt((px - nearestX) ** 2 + (py - nearestY) ** 2);
+        return Math.hypot(px - (p1.x + t * dx), py - (p1.y + t * dy));
     }
 
-    /**
-     * Check if point is inside outer polygon
-     */
-    isPointInOuterPoly(x, y) {
-        const poly = this.editor.mapData.outerPoly;
-        if (poly.length < 3) return false;
-
-        let inside = false;
-        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-            const xi = poly[i].x, yi = poly[i].y;
-            const xj = poly[j].x, yj = poly[j].y;
-
-            if (((yi > y) !== (yj > y)) &&
-                (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-                inside = !inside;
-            }
-        }
-        return inside;
-    }
-
-    /**
-     * Apply snap excluding current vertex
-     */
-    applySnapExcluding(x, y, excludeIndex) {
-        if (!this.editor.snapEnabled) {
-            return { x, y };
-        }
-
-        const threshold = 15 / this.editor.camera.zoom;
-        const allVertices = this.editor.mapData.getAllVertices();
-
-        // Filter out the current vertex
-        const currentVertex = this.vertices[excludeIndex];
-
-        let nearest = null;
-        let minDist = threshold;
-
-        for (const v of allVertices) {
-            // Skip if same as current vertex
-            if (Math.abs(v.x - currentVertex.x) < 0.1 &&
-                Math.abs(v.y - currentVertex.y) < 0.1) {
-                continue;
-            }
-
-            const dist = Math.sqrt((v.x - x) ** 2 + (v.y - y) ** 2);
-            if (dist < minDist) {
-                minDist = dist;
-                nearest = v;
-            }
-        }
-
-        if (nearest) {
-            this.editor.snapPoint = nearest;
-            return { x: nearest.x, y: nearest.y };
-        }
-
-        this.editor.snapPoint = null;
-        return { x, y };
-    }
-
-    /**
-     * Calculate centroid of vertices
-     */
-    calculateCentroid(vertices) {
-        let cx = 0, cy = 0;
-        for (const v of vertices) {
-            cx += v.x;
-            cy += v.y;
-        }
-        return { x: cx / vertices.length, y: cy / vertices.length };
-    }
-
-    drawPreview(ctx) {
-        if (!this.editingObject || this.vertices.length === 0) return;
-
-        const zoom = this.editor.camera.zoom;
-        const vertexRadius = this.vertexRadius / zoom;
-
-        // Draw vertices
-        for (let i = 0; i < this.vertices.length; i++) {
-            const v = this.vertices[i];
-            const isSelected = i === this.selectedVertexIndex;
-
-            ctx.beginPath();
-            ctx.arc(v.x, v.y, vertexRadius, 0, Math.PI * 2);
-
-            if (isSelected) {
-                ctx.fillStyle = '#00ff00';
-                ctx.strokeStyle = '#ffffff';
-            } else {
-                ctx.fillStyle = '#ffffff';
-                ctx.strokeStyle = '#000000';
-            }
-
-            ctx.fill();
-            ctx.lineWidth = 2 / zoom;
-            ctx.stroke();
-        }
-
-        // Highlight selected edge
-        if (this.selectedEdgeIndex !== -1) {
-            const i = this.selectedEdgeIndex;
-            const j = (i + 1) % this.vertices.length;
-
-            // For walls, check bounds
-            if (this.editingObject.type === 'wall' && i >= this.vertices.length - 1) {
-                return;
-            }
-
-            ctx.beginPath();
-            ctx.moveTo(this.vertices[i].x, this.vertices[i].y);
-            ctx.lineTo(this.vertices[j].x, this.vertices[j].y);
-            ctx.strokeStyle = '#00ff00';
-            ctx.lineWidth = 4 / zoom;
-            ctx.stroke();
+    _insertVertex() {
+        if (!this.selectedEdgeId) return;
+        const points = this._getEditingPoints();
+        const idx = points.findIndex(p => `e_${p.id}` === this.selectedEdgeId);
+        
+        if (idx !== -1) {
+            const p1 = points[idx];
+            const p2 = points[(idx + 1) % points.length];
+            const newPoint = {
+                id: `p_edit_${Date.now()}`,
+                x: (p1.x + p2.x) / 2,
+                y: (p1.y + p2.y) / 2
+            };
+            points.splice(idx + 1, 0, newPoint);
+            this.selectedVertexId = newPoint.id;
+            this.selectedEdgeId = null;
+            this.editor.mapData.updateAllGeometry();
+            this.editor.render();
         }
     }
 
-    getStatusText() {
-        if (!this.editingObject) {
-            return 'Edit Shape: Click on a building, wall, obstacle, or inside the outer area to edit vertices';
-        }
+    _deleteVertex() {
+        if (!this.selectedVertexId) return;
+        const points = this._getEditingPoints();
+        if (points.length <= (this.editingObject.type === 'wall' ? 2 : 3)) return;
 
-        let objType = 'Unknown';
-        if (this.editingObject === 'outer') {
-            objType = 'Outer Polygon';
-        } else if (this.editingObject.type === 'building') {
-            objType = 'Building';
-        } else if (this.editingObject.type === 'wall') {
-            objType = 'Wall';
-        } else if (this.editingObject.type === 'obstacle') {
-            objType = 'Obstacle';
+        const idx = points.findIndex(p => p.id === this.selectedVertexId);
+        if (idx !== -1) {
+            points.splice(idx, 1);
+            this.selectedVertexId = null;
+            this.editor.mapData.updateAllGeometry();
+            this.editor.render();
         }
-
-        if (this.selectedVertexIndex !== -1) {
-            return `Editing ${objType}: Drag to move vertex | DEL to delete | Esc to exit`;
-        }
-
-        if (this.selectedEdgeIndex !== -1) {
-            return `Editing ${objType}: INS to add vertex on edge | Esc to exit`;
-        }
-
-        return `Editing ${objType}: Click vertex to select | Click edge to select | Esc to exit`;
-    }
-
-    getCursor() {
-        if (this.isDragging) {
-            return 'grabbing';
-        }
-        return 'crosshair';
     }
 }

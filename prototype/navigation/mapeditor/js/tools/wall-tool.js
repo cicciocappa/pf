@@ -287,7 +287,7 @@ export class WallTool extends Tool {
      */
     registerConnection(wallId, wallEnd, snapInfo) {
 
-        console.log(wallId, wallEnd, snapInfo.isEndpoint);
+        console.log(wallId, wallEnd, snapInfo);
 
         const connManager = this.editor.mapData.connectionManager;
         let type = '';
@@ -301,8 +301,8 @@ export class WallTool extends Tool {
                 console.log("caso 4");
             }
         } else if (snapInfo.snapType === 'edge') {
-            if (snapInfo.type === 'building') {
-                type = 'WALL_TO_BUILDING_EDGE'; // Caso 1
+            if (snapInfo.type === 'building' || snapInfo.type === 'obstacle' || snapInfo.type === 'outer') {
+                type = 'WALL_TO_EDGE'; // Caso 1
             } else if (snapInfo.type === 'wall') {
                 type = 'WALL_TO_WALL_EDGE'; // Caso 3
             }
@@ -315,6 +315,7 @@ export class WallTool extends Tool {
                 wallId: wallId,
                 wallEnd: wallEnd,
                 targetId: snapInfo.targetId,
+                targetType: snapInfo.type,
                 // Dati extra a seconda del tipo
                 targetVertexIndex: snapInfo.vertexIndex,
                 targetVertexId: snapInfo.targetVertexId,

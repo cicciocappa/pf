@@ -30,6 +30,21 @@ export class ObstacleTool extends Tool {
         if (event.button === 0) {
             // Left click - add point
             const point = this.applySnap(x, y);
+             // 2. Controllo Auto-Close: se abbiamo almeno 3 punti, controlliamo la vicinanza al primo
+            if (this.points.length >= 3) {
+                const firstPoint = this.points[0];
+                const dx = point.x - firstPoint.x;
+                const dy = point.y - firstPoint.y;
+
+                // Usiamo una soglia dinamica basata sullo zoom per mantenere la precisione visiva
+                const closeThreshold = 15 / this.editor.camera.zoom;
+                const distSq = dx * dx + dy * dy;
+                console.log(closeThreshold, distSq);
+                if (distSq < (closeThreshold * closeThreshold)) {
+                    this.completePolygon();
+                    return; // Usciamo senza aggiungere il punto
+                }
+            }
             this.points.push({ ...point });
             this.editor.render();
         } else if (event.button === 2) {
@@ -79,14 +94,20 @@ export class ObstacleTool extends Tool {
         if (this.points.length >= 3) {
             // Create obstacle with the drawn vertices
             const obstacle = new Obstacle({
-                vertices: this.points.map(p => ({ x: p.x, y: p.y }))
+                vertices: this.points.map((p, i) => ({
+                    id: `p_obs_${Date.now()}_${i}`,
+                    x: p.x,
+                    y: p.y
+                }))
             });
 
             // Ensure clockwise winding for holes (obstacles are holes in the navmesh)
             if (obstacle.signedArea() > 0) {
                 obstacle.vertices.reverse();
             }
-
+            for (let i=0;i<obstacle.vertices.length;i++) {
+                obstacle.vertices[i].edgeId = `e_${obstacle.vertices[i].id}`;
+            }
             this.editor.mapData.addObstacle(obstacle);
             this.editor.navmesh = null; // Invalidate navmesh
 
@@ -140,7 +161,27 @@ export class ObstacleTool extends Tool {
     }
 
     drawPreview(ctx) {
+        
         if (this.points.length === 0 && !this.previewPoint) return;
+
+        // Se il mouse è vicino al primo punto, evidenziamo il punto iniziale
+        if (this.points.length >= 3) {
+            const firstPoint = this.points[0];
+            const dx = this.previewPoint.x - firstPoint.x;
+            const dy = this.previewPoint.y - firstPoint.y;
+            const closeThreshold = 15 / this.editor.camera.zoom;
+
+            if ((dx * dx + dy * dy) < (closeThreshold * closeThreshold)) {
+                // Disegna un cerchietto di "conferma chiusura" sul primo punto
+                ctx.beginPath();
+                ctx.arc(firstPoint.x, firstPoint.y, 8 / this.editor.camera.zoom, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(0, 255, 0, 0.5)'; // Verde trasparente
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2 / this.editor.camera.zoom;
+                ctx.stroke();
+            }
+        }
 
         const allPoints = [...this.points];
         if (this.previewPoint) {
@@ -165,7 +206,7 @@ export class ObstacleTool extends Tool {
 
     drawObstaclePreview(ctx, vertices, closed = false) {
         if (vertices.length < 1) return;
-
+        
         ctx.beginPath();
         ctx.moveTo(vertices[0].x, vertices[0].y);
         for (let i = 1; i < vertices.length; i++) {

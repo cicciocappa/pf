@@ -178,6 +178,26 @@ body {
     border-color: var(--accent);
 }
 
+#prefab-icon {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-dark);
+    display: inline;
+    margin-bottom: 5px;
+}
+#active-prefab-preview {
+    cursor: pointer;
+    text-align: center;
+}
+#prefab-name {
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+}
+
 /* Canvas Area */
 #canvas-area {
     flex: 1;
