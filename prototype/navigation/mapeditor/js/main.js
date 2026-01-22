@@ -1,4 +1,5 @@
 import { MapEditor } from './map-editor.js';
+import { GeometryFactory } from './factories/geometry-factory.js';
 
 /**
  * Editor Entry Point
@@ -30,7 +31,7 @@ function init() {
     bindFileButtons();
     bindOptions();
     bindDialog();
-
+    populateBuildingsList();
     console.log('Map Editor initialized');
 }
 
@@ -124,6 +125,159 @@ function bindFileButtons() {
     if (exportNavmeshBtn) {
         exportNavmeshBtn.addEventListener('click', () => editor.exportNavMesh());
     }
+}
+
+let currentSelectedBuilding = 'SMALL_HOUSE';
+
+function populateBuildingsList() {
+    const list = document.getElementById('buildings-list');
+    const selector = document.getElementById('buildings-selector');
+    const preview = document.getElementById('active-building-preview');
+    const previewSvg = document.getElementById('building-preview');
+    const buildingName = document.getElementById('building-name');
+    const hoverName = document.getElementById('buildings-hover-name');
+    const templates = GeometryFactory.getAvailableTemplates();
+
+    function formatName(id) {
+        return id.replace(/_/g, ' ');
+    }
+
+    // Popola la griglia con le preview degli edifici
+    templates.forEach(id => {
+        const points = GeometryFactory.getTemplate(id);
+        const svg = createShapePreview(id, points);
+        svg.dataset.templateId = id;
+
+        if (id === currentSelectedBuilding) {
+            svg.classList.add('selected');
+        }
+
+        svg.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectBuilding(id);
+            hideSelector();
+        });
+
+        svg.addEventListener('mouseenter', () => {
+            hoverName.textContent = formatName(id);
+        });
+
+        svg.addEventListener('mouseleave', () => {
+            hoverName.textContent = 'Select a building';
+        });
+
+        list.appendChild(svg);
+    });
+
+    // Imposta la preview iniziale
+    updateBuildingPreview(currentSelectedBuilding);
+
+    // Click sulla preview per aprire/chiudere il selettore
+    preview.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleSelector();
+    });
+
+    // Chiudi il selettore cliccando fuori
+    document.addEventListener('click', (e) => {
+        if (!selector.contains(e.target) && !preview.contains(e.target)) {
+            hideSelector();
+        }
+    });
+
+    function toggleSelector() {
+        if (selector.classList.contains('hidden')) {
+            showSelector();
+        } else {
+            hideSelector();
+        }
+    }
+
+    function showSelector() {
+        // Posiziona il pannello accanto alla preview
+        const rect = preview.getBoundingClientRect();
+        selector.style.left = (rect.right + 8) + 'px';
+        selector.style.top = rect.top + 'px';
+        selector.classList.remove('hidden');
+    }
+
+    function hideSelector() {
+        selector.classList.add('hidden');
+    }
+
+    function selectBuilding(id) {
+        currentSelectedBuilding = id;
+
+        // Aggiorna la selezione visuale nella griglia
+        list.querySelectorAll('.shape-preview').forEach(svg => {
+            svg.classList.toggle('selected', svg.dataset.templateId === id);
+        });
+
+        // Aggiorna la preview principale
+        updateBuildingPreview(id);
+
+        // Aggiorna il tool building
+        const tool = editor.tools['building'];
+        if (tool) {
+            tool.currentTemplateId = id;
+            // Imposta il numero di lati basato sul template
+            const points = GeometryFactory.getTemplate(id);
+            tool.sides = points.length;
+        }
+    }
+
+    function updateBuildingPreview(id) {
+        // Aggiorna il nome
+        buildingName.textContent = formatName(id);
+
+        // Aggiorna l'SVG della preview
+        const points = GeometryFactory.getTemplate(id);
+        const xs = points.map(p => p.x);
+        const ys = points.map(p => p.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const width = maxX - minX;
+        const height = maxY - minY;
+
+        previewSvg.setAttribute('viewBox', `${minX} ${minY} ${width} ${height}`);
+        previewSvg.innerHTML = '';
+
+        const pointStr = points.map(p => `${p.x},${p.y}`).join(' ');
+        const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        polygon.setAttribute('points', pointStr);
+        polygon.setAttribute('fill', 'none');
+        polygon.setAttribute('stroke', 'currentColor');
+        polygon.setAttribute('stroke-width', '0.05');
+        previewSvg.appendChild(polygon);
+    }
+}
+
+function createShapePreview(name, points) {
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const width = maxX - minX;
+  const height = maxY - minY;
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `${minX} ${minY} ${width} ${height}`);
+  svg.classList.add("shape-preview");
+  svg.dataset.name = name;
+
+  const pointStr = points.map(p => `${p.x},${p.y}`).join(" ");
+  const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+  polygon.setAttribute("points", pointStr);
+  polygon.setAttribute("fill", "none");
+  polygon.setAttribute("stroke", "currentColor");
+  polygon.setAttribute("stroke-width", "0.05"); // relativo alla viewBox!
+
+  svg.appendChild(polygon);
+  return svg;
 }
 
 /**

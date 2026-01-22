@@ -66,9 +66,17 @@ export class EditTool extends Tool {
         const hit = this.editor.mapData.findObjectAt(x, y);
         if (hit && hit.type !== 'building') {
             this.enterEditMode(hit);
-        } else {
-            this.exitEditMode();
+            return;
         }
+
+        // Controlliamo se il click è vicino all'outer polygon
+        const outerEdge = this.editor.mapData.findNearestEdge(x, y, threshold * 2);
+        if (outerEdge && outerEdge.type === 'outer') {
+            this.enterEditMode('outer');
+            return;
+        }
+
+        this.exitEditMode();
     }
 
     onMouseMove(x, y, event) {
@@ -130,7 +138,8 @@ export class EditTool extends Tool {
 
     _findEdgeAt(x, y, points) {
         const threshold = 10 / this.editor.camera.zoom;
-        const isClosed = this.editingObject !== 'wall';
+        const isWall = this.editingObject && this.editingObject.type === 'wall';
+        const isClosed = !isWall;
         const limit = isClosed ? points.length : points.length - 1;
 
         for (let i = 0; i < limit; i++) {

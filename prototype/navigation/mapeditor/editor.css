@@ -178,24 +178,114 @@ body {
     border-color: var(--accent);
 }
 
-#prefab-icon {
+#building-preview {
     border: 1px solid var(--border-color);
     border-radius: 4px;
     background: var(--bg-dark);
-    display: inline;
+    display: inline-block;
     margin-bottom: 5px;
+    color: var(--text-primary);
+    transition: border-color 0.15s;
 }
-#active-prefab-preview {
+#building-preview:hover {
+    border-color: var(--accent);
+}
+#active-building-preview {
     cursor: pointer;
     text-align: center;
 }
-#prefab-name {
+#building-name {
     font-size: 13px;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     display: inline-block;
+}
+
+.shape-preview {
+  width: 80px;
+  height: 80px;
+  border: 1px solid var(--border-color);
+  margin: 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: var(--bg-dark);
+}
+.shape-preview:hover {
+  background: var(--bg-light);
+  border-color: var(--text-secondary);
+}
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 8px;
+  padding: 8px;
+}
+
+/* Buildings selector panel */
+#buildings-selector {
+  position: fixed;
+  background: var(--bg-medium);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  z-index: 100;
+  width: 296px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+#buildings-selector.hidden {
+  display: none;
+}
+
+#buildings-selector-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+#buildings-hover-name {
+  font-weight: 500;
+}
+
+#buildings-selector-content {
+  max-height: 296px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#buildings-selector .shape-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 64px);
+  gap: 8px;
+  padding: 8px;
+  justify-content: center;
+}
+
+#buildings-selector .shape-preview {
+  width: 64px;
+  height: 64px;
+  border: 1px solid var(--border-color);
+  margin: 0;
+  cursor: pointer;
+  color: var(--text-primary);
+  background: var(--bg-dark);
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+#buildings-selector .shape-preview:hover {
+  background: var(--bg-light);
+  border-color: var(--accent);
+}
+
+#buildings-selector .shape-preview.selected {
+  border-color: var(--accent);
+  background: var(--bg-light);
 }
 
 /* Canvas Area */

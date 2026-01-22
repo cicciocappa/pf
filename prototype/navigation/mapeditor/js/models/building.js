@@ -148,9 +148,18 @@ export class Building {
     }
 
     static fromJSON(json) {
-        // Passiamo l'oggetto JSON direttamente al costruttore
-        // Il costruttore userà il percorso "data.vertices"
-        return new Building(json);
+        // Non passiamo i vertices al costruttore, così regenerateBase() verrà chiamato
+        // e genererà vertici con id stabili (v_0, v_1, ecc.) che corrispondono
+        // ai targetVertexId salvati nelle connessioni
+        return new Building({
+            id: json.id,
+            templateId: json.templateId,
+            position: json.position,
+            rotation: json.rotation,
+            scaleX: json.scaleX,
+            scaleY: json.scaleY
+            // vertices NON passati -> regenerateBase() verrà chiamato
+        });
     }
 
 

@@ -55,7 +55,7 @@ export class Obstacle {
     toJSON() {
         return {
             id: this.id,
-            vertices: this.vertices.map(v => ({ x: v.x, y: v.y }))
+            vertices: this.vertices.map(v => ({ id: v.id, edgeId: v.edgeId, x: v.x, y: v.y }))
         };
     }
 
@@ -65,9 +65,15 @@ export class Obstacle {
      * @returns {Obstacle}
      */
     static fromJSON(json) {
+        const vertices = (json.vertices || []).map(v => ({
+            id: v.id,
+            edgeId: v.edgeId,
+            x: v.x,
+            y: v.y
+        }));
         return new Obstacle({
             id: json.id,
-            vertices: json.vertices || []
+            vertices: vertices
         });
     }
 }

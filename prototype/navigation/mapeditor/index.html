@@ -48,9 +48,9 @@
             </div>
             <div class="toolbar-section">
                 <h3>Building</h3>
-                <div id="active-prefab-preview" onclick="togglePrefabModal()">
-                    <canvas id="prefab-icon" width="64" height="64"></canvas><br>
-                    <div id="prefab-name">Tower</div>
+                <div id="active-building-preview">
+                    <svg xmlns="http://www.w3.org/2000/svg" id="building-preview" width="64" height="64"></svg><br>
+                    <div id="building-name"></div>
                 </div>
             </div>
             <div class="toolbar-section">
@@ -121,7 +121,7 @@
         </aside>
     </div>
 
-    <!-- Properties Dialog -->
+       <!-- Properties Dialog -->
     <div id="dialog-overlay" class="hidden">
         <div id="properties-dialog">
             <h3 id="dialog-title">Properties</h3>
@@ -142,6 +142,17 @@
         <div class="stat-row"><span>Max Area:</span><span id="stat-max-area">-</span></div>
         <div class="stat-row"><span>Avg Area:</span><span id="stat-avg-area">-</span></div>
         <button id="btn-close-stats" class="small-btn">Close</button>
+    </div>
+
+    <!-- Buildings selector panel -->
+    <div id="buildings-selector" class="hidden">
+        <div id="buildings-selector-header">
+            <span id="buildings-hover-name">Select a building</span>
+        </div>
+        <div id="buildings-selector-content">
+            <div class="shape-grid" id="buildings-list">
+            </div>
+        </div>
     </div>
 
     <script type="module" src="js/main.js"></script>

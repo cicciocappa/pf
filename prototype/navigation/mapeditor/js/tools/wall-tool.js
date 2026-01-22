@@ -234,11 +234,15 @@ export class WallTool extends Tool {
             }
 
             // 1. Generiamo punti con ID persistenti
-            const pointsWithIds = this.points.map((p, index) => ({
-                id: `p_${Date.now()}_${index}`, // ID unico universale
-                x: p.x,
-                y: p.y
-            }));
+            const pointsWithIds = this.points.map((p, index) => {
+                const id = `p_${Date.now()}_${index}`;
+                return {
+                    id: id,
+                    edgeId: `e_${id}`,
+                    x: p.x,
+                    y: p.y
+                };
+            });
 
             // 2. Creazione del muro semplificato (senza logica di snap interna)
             const wall = new Wall({

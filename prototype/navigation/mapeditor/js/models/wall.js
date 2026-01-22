@@ -206,10 +206,15 @@ export class Wall {
      * Ripristina un'istanza di Wall da un oggetto JSON
      */
     static fromJSON(json) {
+        const points = (json.points || []).map(p => ({
+            id: p.id,
+            edgeId: p.edgeId,
+            x: p.x,
+            y: p.y
+        }));
         return new Wall({
             id: json.id,
-            // Cloniamo i punti per evitare riferimenti condivisi indesiderati
-            points: json.points ? json.points.map(p => ({ ...p })) : [],
+            points: points,
             thickness: json.thickness,
             maxSegmentLength: json.maxSegmentLength
         });

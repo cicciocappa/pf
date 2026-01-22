@@ -28,18 +28,22 @@ export class BuildingTool extends Tool {
 
     activate() {
         super.activate();
-        this.resetState();
+        this.resetTransform();
     }
 
-    resetState() {
+    resetTransform() {
         this.rotation = 0;
         this.scaleX = 50;
         this.scaleY = 50;
-        this.sides = 4;
-        this.currentTemplateId = 'ngon';
         this.scaleConstraint = null;
         this.edgeSnapInfo = null;
         this.alignedEdgeIndex = 0;
+    }
+
+    resetState() {
+        this.resetTransform();
+        this.sides = 4;
+        this.currentTemplateId = 'ngon';
     }
 
     onMouseDown(x, y, event) {

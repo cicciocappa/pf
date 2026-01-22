@@ -374,7 +374,8 @@ export class MapData {
     toJSON() {
         return {
             nextId: this.nextId,
-            outer: this.outerPoly.map(p => ({ x: p.x, y: p.y })),
+            // Salviamo id e edgeId per mantenere i riferimenti delle connessioni
+            outer: this.outerPoly.map(p => ({ id: p.id, edgeId: p.edgeId, x: p.x, y: p.y })),
             // Convertiamo le Map in Array
             buildings: Array.from(this.buildings.values()).map(b => b.toJSON()),
             walls: Array.from(this.walls.values()).map(w => w.toJSON()),
@@ -392,7 +393,12 @@ export class MapData {
 
         // 1. Ripristina ID e Poligono Esterno
         this.nextId = json.nextId || 1;
-        this.outerPoly = (json.outer || []).map(p => ({ x: p.x, y: p.y }));
+        this.outerPoly = (json.outer || []).map(p => ({
+            id: p.id,
+            edgeId: p.edgeId,
+            x: p.x,
+            y: p.y
+        }))
 
         // 2. Ripristina Edifici
         (json.buildings || []).forEach(bData => {
