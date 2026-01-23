@@ -334,6 +334,14 @@ function bindOptions() {
         });
     }
 
+    // Merge triangles checkbox (Hertel-Mehlhorn algorithm)
+    const mergeTrianglesChk = document.getElementById('chk-merge-triangles');
+    if (mergeTrianglesChk) {
+        mergeTrianglesChk.addEventListener('change', (e) => {
+            editor.setMergeTriangles(e.target.checked);
+        });
+    }
+
     // Show labels checkbox
     const labelsChk = document.getElementById('chk-show-labels');
     if (labelsChk) {

@@ -11,20 +11,38 @@ export class Geometry {
     }
 
     /**
+     * Compare two points with tolerance (used by Hertel-Mehlhorn)
+     */
+    pointsEqual(p1, p2) {
+        return Math.abs(p1.x - p2.x) < 0.5 && Math.abs(p1.y - p2.y) < 0.5;
+    }
+
+    /**
+     * Remove duplicate consecutive vertices from polygon
+     */
+    removeDuplicateConsecutive(poly) {
+        if (poly.length < 3) return poly;
+
+        const result = [];
+        for (let i = 0; i < poly.length; i++) {
+            const next = poly[(i + 1) % poly.length];
+            if (!this.pointsEqual(poly[i], next)) {
+                result.push(poly[i]);
+            }
+        }
+
+        return result.length >= 3 ? result : poly;
+    }
+
+    /**
      * Check if a point is inside a polygon using ray-casting
      */
-    static isPointInPolygon(px, py, vertices) {
-        if (!vertices || vertices.length < 3) return false;
+    static isPointInPolygon(x, y, vertices) {
+        const pt = { X: Math.round(x * 1000), Y: Math.round(y * 1000) };
+        const path = vertices.map(v => ({ X: Math.round(v.x * 1000), Y: Math.round(v.y * 1000) }));
 
-        let isInside = false;
-        for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-            const vi = vertices[i];
-            const vj = vertices[j];
-            const intersect = ((vi.y > py) !== (vj.y > py)) &&
-                (px < (vj.x - vi.x) * (py - vi.y) / (vj.y - vi.y) + vi.x);
-            if (intersect) isInside = !isInside;
-        }
-        return isInside;
+        // Ritorna: 0 se fuori, -1 se sul bordo, 1 se dentro
+        return ClipperLib.Clipper.PointInPolygon(pt, path) !== 0;
     }
 
     /**
@@ -359,31 +377,23 @@ export class Geometry {
     }
 
     /**
-     * Check if two triangles share an edge
-     * @returns {Object|null} - {edge: [idx1, idx2], sharedVertices: [{x,y}, {x,y}]} or null
+     * Find shared edge between two polygons (returns the two shared vertices)
      */
-    getSharedEdge(tri1, tri2) {
-        const shared = [];
-        const indices1 = [];
-        const indices2 = [];
+    findSharedEdge(polyA, polyB) {
+        const common = [];
 
-        for (let i = 0; i < 3; i++) {
-            for (let j = 0; j < 3; j++) {
-                if (Math.abs(tri1[i].x - tri2[j].x) < this.EPSILON &&
-                    Math.abs(tri1[i].y - tri2[j].y) < this.EPSILON) {
-                    shared.push({ v1: tri1[i], v2: tri2[j] });
-                    indices1.push(i);
-                    indices2.push(j);
+        for (const pA of polyA) {
+            for (const pB of polyB) {
+                if (this.pointsEqual(pA, pB)) {
+                    if (!common.some(c => this.pointsEqual(c, pA))) {
+                        common.push(pA);
+                    }
                 }
             }
         }
 
-        if (shared.length === 2) {
-            return {
-                indices1,
-                indices2,
-                sharedVertices: [shared[0].v1, shared[1].v1]
-            };
+        if (common.length === 2) {
+            return common;
         }
         return null;
     }
@@ -395,55 +405,71 @@ export class Geometry {
         if (polygon.length < 3) return false;
 
         let sign = 0;
-        for (let i = 0; i < polygon.length; i++) {
-            const p1 = polygon[i];
-            const p2 = polygon[(i + 1) % polygon.length];
-            const p3 = polygon[(i + 2) % polygon.length];
 
-            const cross = (p2.x - p1.x) * (p3.y - p2.y) - (p2.y - p1.y) * (p3.x - p2.x);
+        for (let i = 0; i < polygon.length; i++) {
+            const p0 = polygon[i];
+            const p1 = polygon[(i + 1) % polygon.length];
+            const p2 = polygon[(i + 2) % polygon.length];
+
+            const cross = (p1.x - p0.x) * (p2.y - p1.y) - (p1.y - p0.y) * (p2.x - p1.x);
 
             if (Math.abs(cross) > this.EPSILON) {
+                const currentSign = cross > 0 ? 1 : -1;
                 if (sign === 0) {
-                    sign = cross > 0 ? 1 : -1;
-                } else if ((cross > 0 ? 1 : -1) !== sign) {
+                    sign = currentSign;
+                } else if (sign !== currentSign) {
                     return false;
                 }
             }
         }
+
         return true;
     }
 
     /**
-     * Merge two triangles/polygons that share an edge
-     * @returns {Array<{x,y}>|null} - Merged polygon or null if can't merge
+     * Merge two polygons that share an edge (Hertel-Mehlhorn style)
+     * Walks around both polygons to create a merged result
      */
-    mergePolygons(poly1, poly2, sharedEdge) {
-        // Find the non-shared vertices and construct merged polygon
-        const merged = [];
+    mergePolygonsHM(polyA, polyB, sharedEdge) {
+        const [s1, s2] = sharedEdge;
 
-        // Start from first polygon, skip shared edge
-        for (let i = 0; i < poly1.length; i++) {
-            const isShared = sharedEdge.indices1.includes(i);
-            if (!isShared) {
-                merged.push(poly1[i]);
-            } else {
-                // Add first shared vertex if we haven't added non-shared yet
-                if (merged.length > 0 && !sharedEdge.indices1.includes((i + poly1.length - 1) % poly1.length)) {
-                    merged.push(poly1[i]);
-                }
-            }
+        let idxA1 = -1, idxA2 = -1;
+        let idxB1 = -1, idxB2 = -1;
+
+        for (let i = 0; i < polyA.length; i++) {
+            if (this.pointsEqual(polyA[i], s1)) idxA1 = i;
+            if (this.pointsEqual(polyA[i], s2)) idxA2 = i;
         }
 
-        // Insert vertices from second polygon (non-shared ones)
-        const insertIdx = merged.length;
-        for (let i = 0; i < poly2.length; i++) {
-            const isShared = sharedEdge.indices2.includes(i);
-            if (!isShared) {
-                merged.splice(insertIdx, 0, poly2[i]);
-            }
+        for (let i = 0; i < polyB.length; i++) {
+            if (this.pointsEqual(polyB[i], s1)) idxB1 = i;
+            if (this.pointsEqual(polyB[i], s2)) idxB2 = i;
         }
 
-        return merged;
+        if (idxA1 === -1 || idxA2 === -1 || idxB1 === -1 || idxB2 === -1) {
+            return null;
+        }
+
+        const result = [];
+        let current = idxA1;
+        const nA = polyA.length;
+
+        // Walk polyA from idxA1 to idxA2
+        while (current !== idxA2) {
+            result.push({ ...polyA[current] });
+            current = (current + 1) % nA;
+        }
+
+        // Walk polyB from idxB2 to idxB1
+        current = idxB2;
+        const nB = polyB.length;
+
+        while (current !== idxB1) {
+            result.push({ ...polyB[current] });
+            current = (current + 1) % nB;
+        }
+
+        return this.removeDuplicateConsecutive(result);
     }
 
     /**
@@ -454,164 +480,159 @@ export class Geometry {
     hertelMehlhorn(triangles) {
         if (triangles.length === 0) return [];
 
-        // Copy triangles as initial polygons
-        let polygons = triangles.map(tri => [...tri]);
+        // Copy triangles as initial polygons with IDs for tracking
+        let polygons = triangles.map(t => ({
+            vertices: [...t],
+            id: Math.random()
+        }));
 
-        // Build adjacency info
         let changed = true;
-        let iterations = 0;
-        const maxIterations = polygons.length * 2;
-
-        while (changed && iterations < maxIterations) {
+        while (changed) {
             changed = false;
-            iterations++;
 
-            for (let i = 0; i < polygons.length && !changed; i++) {
-                for (let j = i + 1; j < polygons.length && !changed; j++) {
-                    const sharedEdge = this.getSharedEdge(polygons[i], polygons[j]);
+            outer:
+            for (let i = 0; i < polygons.length; i++) {
+                for (let j = i + 1; j < polygons.length; j++) {
+                    const sharedEdge = this.findSharedEdge(polygons[i].vertices, polygons[j].vertices);
 
                     if (sharedEdge) {
-                        // Try to merge
-                        const merged = this.tryMergeConvex(polygons[i], polygons[j]);
+                        const merged = this.mergePolygonsHM(polygons[i].vertices, polygons[j].vertices, sharedEdge);
 
                         if (merged && this.isConvex(merged)) {
-                            // Replace i with merged, remove j
-                            polygons[i] = merged;
+                            polygons[i].vertices = merged;
                             polygons.splice(j, 1);
                             changed = true;
+                            break outer;
                         }
                     }
                 }
             }
         }
 
-        return polygons;
-    }
-
-    /**
-     * Try to merge two adjacent polygons while maintaining convexity
-     */
-    tryMergeConvex(poly1, poly2) {
-        // Find shared edge
-        const sharedVerts = [];
-        const idx1 = [];
-        const idx2 = [];
-
-        for (let i = 0; i < poly1.length; i++) {
-            for (let j = 0; j < poly2.length; j++) {
-                if (Math.abs(poly1[i].x - poly2[j].x) < this.EPSILON &&
-                    Math.abs(poly1[i].y - poly2[j].y) < this.EPSILON) {
-                    sharedVerts.push(i);
-                    idx1.push(i);
-                    idx2.push(j);
-                }
-            }
-        }
-
-        if (sharedVerts.length !== 2) return null;
-
-        // Check if shared vertices are adjacent in both polygons
-        const adj1 = (Math.abs(idx1[0] - idx1[1]) === 1) ||
-                     (idx1[0] === 0 && idx1[1] === poly1.length - 1) ||
-                     (idx1[1] === 0 && idx1[0] === poly1.length - 1);
-        const adj2 = (Math.abs(idx2[0] - idx2[1]) === 1) ||
-                     (idx2[0] === 0 && idx2[1] === poly2.length - 1) ||
-                     (idx2[1] === 0 && idx2[0] === poly2.length - 1);
-
-        if (!adj1 || !adj2) return null;
-
-        // Build merged polygon by walking around both polygons
-        const merged = [];
-
-        // Sort indices for poly1
-        let start1 = Math.min(idx1[0], idx1[1]);
-        let end1 = Math.max(idx1[0], idx1[1]);
-
-        // Handle wrap-around case
-        if (end1 - start1 > 1 && !(start1 === 0 && end1 === poly1.length - 1)) {
-            return null; // Non-adjacent
-        }
-
-        // Walk poly1, excluding one shared vertex
-        let wrapAround1 = (start1 === 0 && end1 === poly1.length - 1);
-        if (wrapAround1) {
-            // Shared edge spans from end to start
-            for (let i = end1; i >= start1 + 1; i--) {
-                merged.push({ ...poly1[i] });
-            }
-        } else {
-            // Normal case
-            for (let i = 0; i < poly1.length; i++) {
-                let idx = (end1 + 1 + i) % poly1.length;
-                if (idx === start1) break;
-                merged.push({ ...poly1[idx] });
-            }
-            merged.push({ ...poly1[start1] });
-        }
-
-        // Find which vertex of poly2 to start from
-        let start2 = idx2.find(i => {
-            const p2v = poly2[i];
-            const p1v = poly1[start1];
-            return Math.abs(p2v.x - p1v.x) < this.EPSILON && Math.abs(p2v.y - p1v.y) < this.EPSILON;
-        });
-
-        let other2 = idx2.find(i => i !== start2);
-
-        // Walk poly2, excluding shared vertices
-        let current = (start2 + 1) % poly2.length;
-        while (current !== other2) {
-            merged.push({ ...poly2[current] });
-            current = (current + 1) % poly2.length;
-        }
-
-        return merged;
+        return polygons.map(p => p.vertices);
     }
 
     /**
      * Complete NavMesh generation pipeline
      * @param {Array<{x,y}>} outer - Outer boundary (CCW)
      * @param {Array<Array<{x,y}>>} holes - Hole polygons (will be made CW)
+     * @param {Object} options - Options for navmesh generation
+     * @param {boolean} options.mergeTriangles - Whether to merge triangles into convex polygons (default: true)
      * @returns {{triangles: Array, polygons: Array}}
      */
-    generateNavMesh(outer, holes) {
-        console.log('generateNavMesh - Input:', {
-            outerPoints: outer.length,
-            holesCount: holes.length
+    generateNavMesh(rawOuter, rawHoles, options = {}) {
+        const agentRadius = options.agentRadius || 15;
+        const gridStep = options.gridStep || 100;
+
+        // 1. CLEANING: Salda i vertici vicini
+        const clean = this.prepareGeometry(rawOuter, rawHoles, 2.0);
+
+        // 2. OFFSET: Espandi gli ostacoli per il raggio dell'agente
+        // Questo previene che l'agente sbatta contro i muri e pulisce le micro-fessure
+        const offsetHoles = this.offsetHoles(clean.holes, agentRadius);
+
+        // 3. TRIANGOLAZIONE
+        const contour = clean.outer.map(p => new poly2tri.Point(p.x, p.y));
+        const swctx = new poly2tri.SweepContext(contour);
+
+        // Aggiungi i buchi con offset
+        offsetHoles.forEach(hole => {
+            swctx.addHole(hole.map(p => new poly2tri.Point(p.x, p.y)));
         });
 
-        // Ensure correct winding: outer = CCW, holes = CW
-        const ccwOuter = this.ensureCCW(outer);
-        console.log('Outer area (should be positive for CCW):', this.signedArea(ccwOuter));
+        // 4. INIEZIONE: Aggiungi i punti di supporto
+        this.injectSteinerPoints(swctx, clean.outer, offsetHoles, gridStep);
 
-        const cwHoles = [];
-        for (let i = 0; i < holes.length; i++) {
-            const hole = holes[i];
-            if (hole.length < 3) {
-                console.warn(`Hole ${i} has less than 3 vertices, skipping`);
-                continue;
-            }
-            const cwHole = this.ensureCW(hole);
-            console.log(`Hole ${i} area (should be negative for CW):`, this.signedArea(cwHole));
-            cwHoles.push(cwHole);
-        }
+        swctx.triangulate();
+        const triangles = swctx.getTriangles().map(tri => {
+            const pts = tri.getPoints();
+            return [{ x: pts[0].x, y: pts[0].y }, { x: pts[1].x, y: pts[1].y }, { x: pts[2].x, y: pts[2].y }];
+        });
 
-        // Triangulate
-        const triangles = this.triangulate(ccwOuter, cwHoles);
-        console.log('Triangulation result:', triangles.length, 'triangles');
-
-        if (triangles.length === 0) {
-            console.error('Triangulation failed - no triangles generated');
-            return { triangles: [], polygons: [] };
-        }
-
-        // Merge triangles into convex polygons
+        // 5. MERGING: Hertel-Mehlhorn sui nuovi triangoli regolari
         const polygons = this.hertelMehlhorn(triangles);
-        console.log('Hertel-Mehlhorn result:', polygons.length, 'convex polygons');
+
+        return { triangles, polygons };
+    }
+
+    offsetHoles(holes, radius = 15) {
+        if (radius <= 0) return holes;
+
+        const co = new ClipperLib.ClipperOffset();
+        const offsetPaths = new ClipperLib.Paths();
+
+        // ClipperOffset lavora meglio se riceve tutti i buchi insieme
+        const allHolesPaths = new ClipperLib.Paths();
+        holes.forEach(hole => {
+            allHolesPaths.push(this.toClipperPath(hole));
+        });
+
+        // Aggiungiamo i percorsi al gestore dell'offset
+        // JoinType.jtMiter crea angoli netti, jtRound crea angoli smussati
+        co.AddPaths(allHolesPaths, ClipperLib.JoinType.jtMiter, ClipperLib.EndType.etClosedPolygon);
+
+        // Eseguiamo l'offset. 
+        // ATTENZIONE: Se i buchi sono CW, un valore positivo li "gonfia" verso l'esterno
+        co.Execute(offsetPaths, radius * this.SCALE);
+
+        const result = [];
+        for (let i = 0; i < offsetPaths.length; i++) {
+            result.push(this.fromClipperPath(offsetPaths[i]));
+        }
+        return result;
+    }
+
+    injectSteinerPoints(swctx, outer, holes, step = 80) {
+        // Calcola i bordi dell'area
+        const minX = Math.min(...outer.map(p => p.x));
+        const maxX = Math.max(...outer.map(p => p.x));
+        const minY = Math.min(...outer.map(p => p.y));
+        const maxY = Math.max(...outer.map(p => p.y));
+
+        for (let x = minX + step; x < maxX; x += step) {
+            for (let y = minY + step; y < maxY; y += step) {
+                // Un punto è valido se è dentro il perimetro e NON è dentro alcun buco
+                if (Geometry.isPointInPolygon(x, y, outer)) {
+                    let inHole = false;
+                    for (const hole of holes) {
+                        if (Geometry.isPointInPolygon(x, y, hole)) {
+                            inHole = true;
+                            break;
+                        }
+                    }
+                    if (!inHole) {
+                        swctx.addPoint(new poly2tri.Point(x, y));
+                    }
+                }
+            }
+        }
+    }
+
+    prepareGeometry(outer, holes, snapDist = 2.0) {
+        const scaleDist = snapDist * this.SCALE;
+
+        // 1. Converti in Clipper Paths
+        let outerPath = this.toClipperPath(outer);
+        let holesPaths = holes.map(h => this.toClipperPath(h));
+
+        // 2. Pulizia sicura
+        // JS-Clipper solitamente ha CleanPolygon e CleanPaths come metodi statici di ClipperLib
+        try {
+            if (typeof ClipperLib.Clipper.CleanPolygon === 'function') {
+                outerPath = ClipperLib.Clipper.CleanPolygon(outerPath, scaleDist);
+            }
+
+            // Se CleanPaths non esiste, puliamo ogni buco singolarmente
+            holesPaths = holesPaths.map(path => {
+                return ClipperLib.Clipper.CleanPolygon(path, scaleDist);
+            });
+        } catch (e) {
+            console.warn("Clipper cleaning methods not found, using raw paths", e);
+        }
 
         return {
-            triangles,
-            polygons
+            outer: this.fromClipperPath(outerPath),
+            holes: holesPaths.map(p => this.fromClipperPath(p))
         };
     }
 

@@ -59,6 +59,7 @@ export class MapEditor {
         this.navmesh = null;
         this.showTriangles = false;
         this.showLabels = false;
+        this.mergeTriangles = true; // Enable Hertel-Mehlhorn merge by default
 
         // Debug visualization
         this.showHolesDebug = false;
@@ -569,8 +570,10 @@ export class MapEditor {
             // Store holes for debug visualization
             this.debugHoles = holes.map(h => h.map(v => ({ x: v.x, y: v.y })));
 
-            // Generate NavMesh (triangulation + Hertel-Mehlhorn)
-            const result = this.geometry.generateNavMesh(outer, holes);
+            // Generate NavMesh (triangulation + optional Hertel-Mehlhorn merge)
+            const result = this.geometry.generateNavMesh(outer, holes, {
+                mergeTriangles: this.mergeTriangles
+            });
 
             this.navmesh = {
                 triangles: result.triangles,
@@ -824,6 +827,13 @@ export class MapEditor {
     setShowTriangles(show) {
         this.showTriangles = show;
         this.render();
+    }
+
+    /**
+     * Toggle Hertel-Mehlhorn merge algorithm
+     */
+    setMergeTriangles(enabled) {
+        this.mergeTriangles = enabled;
     }
 
     /**
