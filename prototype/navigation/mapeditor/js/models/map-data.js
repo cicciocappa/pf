@@ -398,7 +398,7 @@ export class MapData {
             edgeId: p.edgeId,
             x: p.x,
             y: p.y
-        }))
+        }));
 
         // 2. Ripristina Edifici
         (json.buildings || []).forEach(bData => {

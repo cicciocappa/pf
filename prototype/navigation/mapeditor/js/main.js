@@ -308,13 +308,37 @@ function bindOptions() {
         });
     }
 
-    // Grid size selector
-    const gridSizeSel = document.getElementById('rng-grid-size');
-    const gridSizeValue = document.getElementById('val-grid-size');
-    if (gridSizeSel) {
-        gridSizeSel.addEventListener('input', (e) => {
-            gridSizeValue.textContent = `(${e.target.value}px)`;
+    // Grid size selector (range and text input synchronized)
+    const gridSizeRange = document.getElementById('rng-grid-size');
+    const gridSizeInput = document.getElementById('val-grid-size');
+    if (gridSizeRange && gridSizeInput) {
+        gridSizeRange.addEventListener('input', (e) => {
+            gridSizeInput.value = e.target.value;
             editor.setGridSize(parseInt(e.target.value, 10));
+        });
+        gridSizeInput.addEventListener('input', (e) => {
+            let value = parseInt(e.target.value, 10);
+            if (!isNaN(value)) {
+                value = Math.max(8, Math.min(128, value));
+                gridSizeRange.value = value;
+                editor.setGridSize(value);
+            }
+        });
+        gridSizeInput.addEventListener('blur', (e) => {
+            let value = parseInt(e.target.value, 10);
+            if (isNaN(value) || value < 8) value = 8;
+            if (value > 128) value = 128;
+            e.target.value = value;
+            gridSizeRange.value = value;
+            editor.setGridSize(value);
+        });
+    }
+
+    // Show labels checkbox
+    const labelsChk = document.getElementById('chk-show-labels');
+    if (labelsChk) {
+        labelsChk.addEventListener('change', (e) => {
+            editor.setShowLabels(e.target.checked);
         });
     }
 

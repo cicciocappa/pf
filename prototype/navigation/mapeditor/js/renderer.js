@@ -111,6 +111,11 @@ export class Renderer {
         // Draw walls
         this.drawWalls();
 
+        // Draw labels if enabled
+        if (this.editor.showLabels) {
+            this.drawLabels();
+        }
+
         // Draw current tool preview
         if (this.editor.currentTool) {
             this.editor.currentTool.drawPreview(ctx);
@@ -750,6 +755,89 @@ export class Renderer {
         const len = Math.sqrt(v.x * v.x + v.y * v.y);
         if (len < 0.001) return { x: 0, y: 0 };
         return { x: v.x / len, y: v.y / len };
+    }
+
+    /**
+     * Draw labels for all objects that have a non-empty label
+     */
+    drawLabels() {
+        const ctx = this.ctx;
+        const zoom = this.editor.camera.zoom;
+
+        ctx.save();
+        ctx.font = `bold ${14 / zoom}px Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Draw building labels
+        for (const building of this.editor.mapData.buildings.values()) {
+            if (building.label) {
+                const center = building.getCenter();
+                this.drawLabelAt(center.x, center.y, building.label, this.colors.building);
+            }
+        }
+
+        // Draw wall labels
+        for (const wall of this.editor.mapData.walls.values()) {
+            if (wall.label && wall.points.length >= 2) {
+                // Calculate center of wall polyline
+                let cx = 0, cy = 0;
+                for (const p of wall.points) {
+                    cx += p.x;
+                    cy += p.y;
+                }
+                cx /= wall.points.length;
+                cy /= wall.points.length;
+                this.drawLabelAt(cx, cy, wall.label, this.colors.wall);
+            }
+        }
+
+        // Draw obstacle labels
+        for (const obstacle of this.editor.mapData.obstacles.values()) {
+            if (obstacle.label) {
+                const center = obstacle.getCenter();
+                this.drawLabelAt(center.x, center.y, obstacle.label, this.colors.obstacle);
+            }
+        }
+
+        ctx.restore();
+    }
+
+    /**
+     * Draw a label with background at specified position
+     */
+    drawLabelAt(x, y, text, color) {
+        const ctx = this.ctx;
+        const zoom = this.editor.camera.zoom;
+        const padding = 4 / zoom;
+
+        // Measure text
+        const metrics = ctx.measureText(text);
+        const textWidth = metrics.width;
+        const textHeight = 14 / zoom;
+
+        // Draw background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(
+            x - textWidth / 2 - padding,
+            y - textHeight / 2 - padding,
+            textWidth + padding * 2,
+            textHeight + padding * 2
+        );
+
+        // Draw border
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1 / zoom;
+        ctx.strokeRect(
+            x - textWidth / 2 - padding,
+            y - textHeight / 2 - padding,
+            textWidth + padding * 2,
+            textHeight + padding * 2
+        );
+
+        // Draw text
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(text, x, y);
     }
 
     /**

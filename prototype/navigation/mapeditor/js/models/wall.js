@@ -9,6 +9,7 @@ export class Wall {
         this.thickness = options.thickness || 30;
         this.maxSegmentLength = options.maxSegmentLength || 50;
         this.type = 'wall';
+        this.label = options.label || '';
 
         // Cache della geometria finale (array di quadrilateri)
         this.units = [];
@@ -197,6 +198,7 @@ export class Wall {
     toJSON() {
         return {
             id: this.id,
+            label: this.label,
             points: this.points.map(p => ({ ...p })),
             thickness: this.thickness,
             maxSegmentLength: this.maxSegmentLength
@@ -214,6 +216,7 @@ export class Wall {
         }));
         return new Wall({
             id: json.id,
+            label: json.label,
             points: points,
             thickness: json.thickness,
             maxSegmentLength: json.maxSegmentLength

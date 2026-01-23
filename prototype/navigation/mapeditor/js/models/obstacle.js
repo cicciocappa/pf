@@ -5,6 +5,7 @@ export class Obstacle {
         this.id = options.id;
         this.vertices = options.vertices || []; // Array of {x, y}
         this.type = 'obstacle';
+        this.label = options.label || '';
     }
 
     containsPoint(x, y) {
@@ -55,6 +56,7 @@ export class Obstacle {
     toJSON() {
         return {
             id: this.id,
+            label: this.label,
             vertices: this.vertices.map(v => ({ id: v.id, edgeId: v.edgeId, x: v.x, y: v.y }))
         };
     }
@@ -73,6 +75,7 @@ export class Obstacle {
         }));
         return new Obstacle({
             id: json.id,
+            label: json.label,
             vertices: vertices
         });
     }

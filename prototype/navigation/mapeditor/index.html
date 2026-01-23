@@ -7,6 +7,7 @@
     <title>Map Editor - NavMesh Generator</title>
     <link rel="stylesheet" href="editor.css">
     <script src="js/poly2tri.min.js"></script>
+    <script src="js/clipper.js"></script>
 </head>
 
 <body>
@@ -82,11 +83,15 @@
                 </label>
                 <label class="checkbox-label">
                     <input type="checkbox" id="chk-snap-grid">
-                    Snap to grid <span id="val-grid-size">(32px)</span>
+                    Snap to grid <input type="number" id="val-grid-size" min="8" max="128" value="32">px
                 </label>
                 <div class="option-row" id="grid-size-row">
                     <input type="range" id="rng-grid-size" min="8" max="128" value="32">
                 </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-show-labels">
+                    Show labels
+                </label>
                 <label class="checkbox-label">
                     <input type="checkbox" id="chk-show-triangles">
                     Show triangles

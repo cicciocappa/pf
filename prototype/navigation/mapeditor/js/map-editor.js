@@ -58,6 +58,7 @@ export class MapEditor {
         // NavMesh
         this.navmesh = null;
         this.showTriangles = false;
+        this.showLabels = false;
 
         // Debug visualization
         this.showHolesDebug = false;
@@ -200,6 +201,24 @@ export class MapEditor {
      * Handle key down
      */
     handleKeyDown(e) {
+        // Ignore keyboard shortcuts when typing in input fields or when dialog is open
+        const activeElement = document.activeElement;
+        const isInputFocused = activeElement && (
+            activeElement.tagName === 'INPUT' ||
+            activeElement.tagName === 'TEXTAREA' ||
+            activeElement.isContentEditable
+        );
+        const isDialogOpen = !document.getElementById('dialog-overlay')?.classList.contains('hidden');
+
+        if (isInputFocused || isDialogOpen) {
+            // Allow Escape to close dialog
+            if (e.key === 'Escape' && isDialogOpen) {
+                document.getElementById('dialog-cancel')?.click();
+                e.preventDefault();
+            }
+            return;
+        }
+
         // Space for pan mode
         if (e.code === 'Space' && !this.spacePressed) {
             this.spacePressed = true;
@@ -231,7 +250,7 @@ export class MapEditor {
                     this.setTool('select');
                     e.preventDefault();
                     return;
-                
+
                 case 'A':
                     this.setTool('draw-area');
                     e.preventDefault();
@@ -250,6 +269,30 @@ export class MapEditor {
                     return;
                 case 'E':
                     this.setTool('edit');
+                    e.preventDefault();
+                    return;
+            }
+
+            // Snap shortcuts (1, 2, 3)
+            switch (e.key) {
+                case '1':
+                    this.snapEnabled = !this.snapEnabled;
+                    if (!this.snapEnabled) this.snapPoint = null;
+                    document.getElementById('chk-snap').checked = this.snapEnabled;
+                    this.render();
+                    e.preventDefault();
+                    return;
+                case '2':
+                    this.snapToEdgeEnabled = !this.snapToEdgeEnabled;
+                    if (!this.snapToEdgeEnabled) this.edgeSnapInfo = null;
+                    document.getElementById('chk-snap-edge').checked = this.snapToEdgeEnabled;
+                    this.render();
+                    e.preventDefault();
+                    return;
+                case '3':
+                    this.gridSnapEnabled = !this.gridSnapEnabled;
+                    document.getElementById('chk-snap-grid').checked = this.gridSnapEnabled;
+                    this.render();
                     e.preventDefault();
                     return;
             }
@@ -480,175 +523,62 @@ export class MapEditor {
         }
 
         try {
-            // Get outer polygon (ensure counter-clockwise)
-            let outer = [...this.mapData.outerPoly];
-            if (this.signedArea(outer) < 0) {
-                outer.reverse();
-            }
+            // Get outer polygon
+            const outer = this.mapData.outerPoly.map(p => ({ x: p.x, y: p.y }));
+            console.log('Bake - Outer polygon:', outer.length, 'vertices');
 
-            // Step 1: Resolve building overlaps
-            const buildingPolygons = this.mapData.buildings.map(b => ({
-                id: b.id,
-                vertices: b.getVertices()
-            }));
-
-            const overlapResult = this.geometry.resolveAllOverlaps(buildingPolygons);
-
-            // Check for errors
-            if (overlapResult.errors.length > 0) {
-                const errorMessages = overlapResult.errors.map(e =>
-                    `Buildings ${e.ids.join(' and ')}: ${e.error}`
-                ).join('\n');
-                alert('Cannot bake NavMesh due to invalid overlaps:\n\n' + errorMessages);
-                return;
-            }
-
-            // Step 2: Validate wall connections
-            const validationResult = this.geometry.validateWallConnections(
-                this.mapData.walls,
-                this.mapData
-            );
-
-            if (!validationResult.valid) {
-                const errorMessages = validationResult.errors.map(e =>
-                    `Wall ${e.wallId} (${e.endpoint}): ${e.error}`
-                ).join('\n');
-                console.warn('Wall connection validation warnings:\n' + errorMessages);
-                // Don't block baking, just warn - some connections may still work partially
-            }
-
-            // Step 3: Prepare polygon data for processing
-            // Note: Vertex/edge opening for wall connections is now handled directly
-            // in processConnectedGroup via buildMergedPolygonWithWalls
-            const obstaclePolygons = this.mapData.obstacles.map(o => ({
-                id: o.id,
-                vertices: o.getVertices()
-            }));
-
-            // Buildings and obstacles for fallback merge path
-            const modifiedBuildings = overlapResult.resolved;
-            const modifiedObstacles = obstaclePolygons;
-
-            // Step 4: Find connected groups and merge their geometries
-            const connectedGroups = this.geometry.findConnectedGroups(
+            // Find connected groups of elements
+            const groups = this.geometry.findConnectedGroups(
                 this.mapData.walls,
                 this.mapData.buildings,
-                this.mapData.obstacles
+                this.mapData.obstacles,
+                this.mapData.connections
             );
+            console.log('Bake - Found', groups.length, 'connected groups');
 
-            // Step 5: Process groups and generate holes
+            // Generate holes by merging connected elements
             const holes = [];
-            const obstacleGroups = []; // For export: groups of elements that form obstacles
-            const debugMergeComponents = []; // For debug: separate components before merging
 
-            // Track which elements have been processed
-            const processedBuildings = new Set();
-            const processedObstacles = new Set();
-            const processedWalls = new Set();
+            for (const group of groups) {
+                console.log('Processing group:', {
+                    walls: group.walls.size,
+                    buildings: group.buildings.size,
+                    obstacles: group.obstacles.size
+                });
 
-            // Process each connected group
-            for (const group of connectedGroups) {
-                const groupResult = this.geometry.processConnectedGroup(
+                // Get merged polygons for this group
+                const mergedPolygons = this.geometry.mergeGroupPolygons(
                     group,
-                    this.mapData,
-                    modifiedBuildings,
-                    modifiedObstacles
+                    this.mapData.walls,
+                    this.mapData.buildings,
+                    this.mapData.obstacles
                 );
 
-                // Add holes from this group
-                holes.push(...groupResult.holes);
+                console.log('Group produced', mergedPolygons.length, 'polygons');
 
-                // Store debug components if available
-                if (groupResult.debugComponents) {
-                    debugMergeComponents.push({
-                        buildingPolygon: groupResult.debugComponents.buildingPolygon,
-                        wallPolygons: groupResult.debugComponents.wallPolygons,
-                        mergedPolygon: groupResult.holes[0] // The merged result
-                    });
-                }
-
-                // Track processed elements
-                for (const buildingId of group.buildings) {
-                    processedBuildings.add(buildingId);
-                }
-                for (const obstacleId of group.obstacles) {
-                    processedObstacles.add(obstacleId);
-                }
-                for (const wallId of group.walls) {
-                    processedWalls.add(wallId);
-                }
-
-                // Store group info for export
-                obstacleGroups.push({
-                    elements: groupResult.elements,
-                    merged: groupResult.merged,
-                    connectsToOuter: group.connectsToOuter
-                });
-            }
-
-            // Add any unconnected (isolated) elements as separate holes
-            for (const building of modifiedBuildings) {
-                if (!processedBuildings.has(building.id)) {
-                    const vertices = building.vertices.map(v => ({ x: v.x, y: v.y }));
-                    if (this.signedArea(vertices) > 0) {
-                        vertices.reverse();
+                // Add merged polygons as holes
+                for (const poly of mergedPolygons) {
+                    if (poly.length >= 3) {
+                        holes.push(poly);
                     }
-                    holes.push(vertices);
-                    obstacleGroups.push({
-                        elements: [{ type: 'building', id: building.id }],
-                        merged: false,
-                        connectsToOuter: false
-                    });
                 }
             }
 
-            for (const obstacle of modifiedObstacles) {
-                if (!processedObstacles.has(obstacle.id)) {
-                    const vertices = obstacle.vertices.map(v => ({ x: v.x, y: v.y }));
-                    if (this.signedArea(vertices) > 0) {
-                        vertices.reverse();
-                    }
-                    holes.push(vertices);
-                    // Obstacles are non-destructible, don't add to obstacleGroups
-                }
-            }
-
-            for (const wall of this.mapData.walls) {
-                if (!processedWalls.has(wall.id)) {
-                    const quads = wall.toQuadrilaterals(this.mapData);
-                    for (let i = 0; i < quads.length; i++) {
-                        const quad = quads[i];
-                        if (this.signedArea(quad) > 0) {
-                            quad.reverse();
-                        }
-                        holes.push(quad);
-                    }
-                    obstacleGroups.push({
-                        elements: [{ type: 'wall', id: wall.id }],
-                        merged: false,
-                        connectsToOuter: false
-                    });
-                }
-            }
+            console.log('Bake - Total holes:', holes.length);
 
             // Store holes for debug visualization
             this.debugHoles = holes.map(h => h.map(v => ({ x: v.x, y: v.y })));
-            console.log('Computed holes for debug:', this.debugHoles);
 
-            // Store merge components for debug visualization
-            this.debugMergeComponents = debugMergeComponents;
-            console.log('Debug merge components:', this.debugMergeComponents);
+            // Generate NavMesh (triangulation + Hertel-Mehlhorn)
+            const result = this.geometry.generateNavMesh(outer, holes);
 
-            // Step 6: Compute navmesh
-            const result = this.geometry.computeNavMeshWithTriangles(outer, holes);
-            this.navmesh = result;
-
-            // Store data for export
-            this.resolvedBuildings = modifiedBuildings;
-            this.obstacleGroups = obstacleGroups;
+            this.navmesh = {
+                triangles: result.triangles,
+                merged: result.polygons
+            };
 
             // Display stats
-            const stats = this.geometry.calculateStats(result.merged);
+            const stats = this.geometry.calculateStats(result.polygons);
             this.displayStats(stats, result.triangles.length);
 
             this.render();
@@ -656,53 +586,6 @@ export class MapEditor {
             console.error('Bake error:', err);
             alert('Error generating NavMesh: ' + err.message);
         }
-    }
-
-    /**
-     * Get all holes using pre-modified polygon data
-     * @param {Array} modifiedBuildings - Modified building polygons
-     * @param {Array} modifiedObstacles - Modified obstacle polygons
-     * @returns {Array<Array<{x,y}>>}
-     */
-    getHolesWithModifiedPolygons(modifiedBuildings, modifiedObstacles) {
-        const holes = [];
-
-        // Add modified obstacle vertices as holes (non-destructible)
-        for (const obstacle of modifiedObstacles) {
-            const vertices = obstacle.vertices.map(v => ({ x: v.x, y: v.y }));
-            // Ensure clockwise winding for holes
-            if (this.signedArea(vertices) > 0) {
-                vertices.reverse();
-            }
-            holes.push(vertices);
-        }
-
-        // Add modified building vertices as holes
-        for (const building of modifiedBuildings) {
-            const vertices = building.vertices.map(v => ({ x: v.x, y: v.y }));
-            // Ensure clockwise winding for holes
-            if (this.signedArea(vertices) > 0) {
-                vertices.reverse();
-            }
-            holes.push(vertices);
-        }
-
-        // Add wall quadrilaterals as holes (one per subdivision)
-        // Pass mapData to allow vertex snap lookups
-        for (const wall of this.mapData.walls) {
-            const quads = wall.toQuadrilaterals(this.mapData);
-            for (const quad of quads) {
-                if (quad.length >= 3) {
-                    // Ensure clockwise winding for holes
-                    if (this.signedArea(quad) > 0) {
-                        quad.reverse();
-                    }
-                    holes.push(quad);
-                }
-            }
-        }
-
-        return holes;
     }
 
     /**
@@ -782,7 +665,7 @@ export class MapEditor {
 
     /**
      * Export NavMesh to JSON
-     * Includes navmesh polygons, static obstacles, and destructible obstacle groups
+     * Format: { navmesh, destructible, obstacle }
      */
     exportNavMesh() {
         if (!this.navmesh) {
@@ -790,95 +673,56 @@ export class MapEditor {
             return;
         }
 
-        // NavMesh format: array of convex polygons
-        const navMeshPolygons = this.navmesh.merged.map((poly, idx) => ({
+        // NavMesh: array of convex polygons
+        const navmesh = this.navmesh.merged.map((poly, idx) => ({
             id: `nav_${idx}`,
             vertices: poly.map(v => ({ x: v.x, y: v.y }))
         }));
 
-        // Static obstacles (non-destructible) - from obstacles array
-        const staticObstacles = this.mapData.obstacles.map(obstacle => ({
-            id: obstacle.id,
-            vertices: obstacle.getVertices().map(v => ({ x: v.x, y: v.y })),
-            destructible: false
-        }));
+        // Destructible: buildings and wall units (label + polygon)
+        const destructible = [];
 
-        // Destructible obstacle groups - buildings and walls that can be destroyed
-        const destructibleGroups = [];
+        // Add buildings
+        for (const building of this.mapData.buildings.values()) {
+            destructible.push({
+                type: 'building',
+                id: building.id,
+                label: building.label || '',
+                vertices: building.getVertices().map(v => ({ x: v.x, y: v.y }))
+            });
+        }
 
-        if (this.obstacleGroups) {
-            for (let i = 0; i < this.obstacleGroups.length; i++) {
-                const group = this.obstacleGroups[i];
-
-                // Skip groups that only contain obstacles (they're non-destructible)
-                const hasDestructible = group.elements.some(e =>
-                    e.type === 'building' || e.type === 'wall' || e.type === 'wall_segment'
-                );
-                if (!hasDestructible) continue;
-
-                // Get the geometries for each element in the group
-                const elements = [];
-                for (const elem of group.elements) {
-                    if (elem.type === 'building') {
-                        const building = this.mapData.getBuildingById(elem.id);
-                        if (building) {
-                            elements.push({
-                                type: 'building',
-                                id: elem.id,
-                                vertices: building.getVertices().map(v => ({ x: v.x, y: v.y }))
-                            });
-                        }
-                    } else if (elem.type === 'wall') {
-                        const wall = this.mapData.getWallById(elem.id);
-                        if (wall) {
-                            const quads = wall.toQuadrilaterals(this.mapData);
-                            elements.push({
-                                type: 'wall',
-                                id: elem.id,
-                                segments: quads.map(q => q.map(v => ({ x: v.x, y: v.y })))
-                            });
-                        }
-                    } else if (elem.type === 'wall_segment') {
-                        // Individual wall segment (part of merged group)
-                        const wall = this.mapData.getWallById(elem.id);
-                        if (wall) {
-                            const quads = wall.toQuadrilaterals(this.mapData);
-                            if (elem.segmentIndex < quads.length) {
-                                elements.push({
-                                    type: 'wall_segment',
-                                    id: elem.id,
-                                    segmentIndex: elem.segmentIndex,
-                                    vertices: quads[elem.segmentIndex].map(v => ({ x: v.x, y: v.y }))
-                                });
-                            }
-                        }
-                    }
+        // Add wall units
+        for (const wall of this.mapData.walls.values()) {
+            if (wall.units) {
+                for (let i = 0; i < wall.units.length; i++) {
+                    const unit = wall.units[i];
+                    destructible.push({
+                        type: 'wall_unit',
+                        id: unit.id,
+                        wallId: wall.id,
+                        label: wall.label || '',
+                        vertices: unit.vertices.map(v => ({ x: v.x, y: v.y }))
+                    });
                 }
-
-                destructibleGroups.push({
-                    groupId: `group_${i}`,
-                    merged: group.merged,
-                    connectsToPerimeter: group.connectsToOuter,
-                    elements: elements
-                });
             }
+        }
+
+        // Obstacles: non-destructible elements (label + polygon)
+        const obstacle = [];
+        for (const obs of this.mapData.obstacles.values()) {
+            obstacle.push({
+                id: obs.id,
+                label: obs.label || '',
+                vertices: obs.getVertices().map(v => ({ x: v.x, y: v.y }))
+            });
         }
 
         // Export data structure
         const data = {
-            version: 1,
-            navMesh: {
-                polygons: navMeshPolygons,
-                triangleCount: this.navmesh.triangles.length
-            },
-            staticObstacles: staticObstacles,
-            destructibleGroups: destructibleGroups,
-            metadata: {
-                totalNavPolygons: navMeshPolygons.length,
-                totalStaticObstacles: staticObstacles.length,
-                totalDestructibleGroups: destructibleGroups.length,
-                exportDate: new Date().toISOString()
-            }
+            navmesh,
+            destructible,
+            obstacle
         };
 
         this.downloadJson(data, 'navmesh.json');
@@ -967,6 +811,14 @@ export class MapEditor {
     }
 
     /**
+     * Toggle labels display
+     */
+    setShowLabels(show) {
+        this.showLabels = show;
+        this.render();
+    }
+
+    /**
      * Toggle triangle display
      */
     setShowTriangles(show) {
@@ -1009,18 +861,24 @@ export class MapEditor {
         if (obj.type === 'building') {
             titleEl.textContent = 'Building Properties';
             properties = {
-                posX: { label: 'Position X', value: obj.position.x, step: 1 },
-                posY: { label: 'Position Y', value: obj.position.y, step: 1 },
-                rotation: { label: 'Rotation (deg)', value: (obj.rotation * 180 / Math.PI), step: 1 },
-                scaleX: { label: 'Scale X', value: obj.scaleX, step: 1, min: 1 },
-                scaleY: { label: 'Scale Y', value: obj.scaleY, step: 1, min: 1 },
-                sides: { label: 'Sides', value: obj.sides, step: 1, min: 3, max: 12 }
+                label: { label: 'Label', value: obj.label || '', type: 'text' },
+                posX: { label: 'Position X', value: obj.position.x, step: 1, type: 'number' },
+                posY: { label: 'Position Y', value: obj.position.y, step: 1, type: 'number' },
+                rotation: { label: 'Rotation (deg)', value: (obj.rotation * 180 / Math.PI), step: 1, type: 'number' },
+                scaleX: { label: 'Scale X', value: obj.scaleX, step: 1, min: 1, type: 'number' },
+                scaleY: { label: 'Scale Y', value: obj.scaleY, step: 1, min: 1, type: 'number' }
             };
         } else if (obj.type === 'wall') {
             titleEl.textContent = 'Wall Properties';
             properties = {
-                thickness: { label: 'Thickness', value: obj.thickness, step: 1, min: 2 },
-                maxSegmentLength: { label: 'Max Segment Length', value: obj.maxSegmentLength, step: 1, min: 5 }
+                label: { label: 'Label', value: obj.label || '', type: 'text' },
+                thickness: { label: 'Thickness', value: obj.thickness, step: 1, min: 2, type: 'number' },
+                maxSegmentLength: { label: 'Max Segment Length', value: obj.maxSegmentLength, step: 1, min: 5, type: 'number' }
+            };
+        } else if (obj.type === 'obstacle') {
+            titleEl.textContent = 'Obstacle Properties';
+            properties = {
+                label: { label: 'Label', value: obj.label || '', type: 'text' }
             };
         }
 
@@ -1035,7 +893,7 @@ export class MapEditor {
             label.setAttribute('for', `prop-${key}`);
 
             const input = document.createElement('input');
-            input.type = 'number';
+            input.type = prop.type || 'number';
             input.id = `prop-${key}`;
             input.name = key;
             input.value = prop.value;
@@ -1051,15 +909,20 @@ export class MapEditor {
         // OK handler
         const handleOk = () => {
             if (obj.type === 'building') {
+                obj.label = document.getElementById('prop-label').value || '';
                 obj.position.x = parseFloat(document.getElementById('prop-posX').value) || 0;
                 obj.position.y = parseFloat(document.getElementById('prop-posY').value) || 0;
                 obj.rotation = (parseFloat(document.getElementById('prop-rotation').value) || 0) * Math.PI / 180;
                 obj.scaleX = parseFloat(document.getElementById('prop-scaleX').value) || 50;
                 obj.scaleY = parseFloat(document.getElementById('prop-scaleY').value) || 50;
-                obj.sides = parseInt(document.getElementById('prop-sides').value) || 4;
+                obj.regenerateBase();
             } else if (obj.type === 'wall') {
+                obj.label = document.getElementById('prop-label').value || '';
                 obj.thickness = parseFloat(document.getElementById('prop-thickness').value) || 10;
                 obj.maxSegmentLength = parseFloat(document.getElementById('prop-maxSegmentLength').value) || 30;
+                obj.updateVertices();
+            } else if (obj.type === 'obstacle') {
+                obj.label = document.getElementById('prop-label').value || '';
             }
 
             this.navmesh = null;

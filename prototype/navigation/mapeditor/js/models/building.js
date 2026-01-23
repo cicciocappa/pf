@@ -10,6 +10,7 @@ export class Building {
         this.id = data.id;
         this.templateId = data.templateId || 'ngon_4';
         this.type = 'building';
+        this.label = data.label || '';
 
         // Parametri di trasformazione (la "memoria" dell'asset)
         this.position = data.position || { x: 0, y: 0 };
@@ -138,6 +139,7 @@ export class Building {
         return {
             id: this.id,
             templateId: this.templateId,
+            label: this.label,
             position: { ...this.position },
             rotation: this.rotation,
             scaleX: this.scaleX,
@@ -154,6 +156,7 @@ export class Building {
         return new Building({
             id: json.id,
             templateId: json.templateId,
+            label: json.label,
             position: json.position,
             rotation: json.rotation,
             scaleX: json.scaleX,
