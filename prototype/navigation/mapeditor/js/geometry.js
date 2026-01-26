@@ -655,4 +655,42 @@ export class Geometry {
             totalArea
         };
     }
+
+    // Esempio logico di Rasterizzazione e tracciamento contorni
+    generateProNavMesh(editor, cellSize = 10) {
+        const { grid, cols, rows } = this.rasterizeMap(editor, cellSize);
+
+        // Trova i perimetri delle "isole" calpestabili
+        const contours = this.extractContours(grid, cols, rows, cellSize);
+
+        // Semplifica i contorni per rimuovere l'effetto "pixel"
+        const simplifiedContours = contours.map(c => this.douglasPeucker(c, 2.0));
+
+        // Ora usiamo questi contorni puliti come "Outer" per poly2tri
+        // (o ne facciamo una decomposizione convessa)
+        return this.triangulateSimplified(simplifiedContours);
+    }
+    douglasPeucker(points, epsilon) {
+        if (points.length < 3) return points;
+
+        let dmax = 0;
+        let index = 0;
+        const end = points.length - 1;
+
+        for (let i = 1; i < end; i++) {
+            const d = this.perpendicularDistance(points[i], points[0], points[end]);
+            if (d > dmax) {
+                index = i;
+                dmax = d;
+            }
+        }
+
+        if (dmax > epsilon) {
+            const recResults1 = this.douglasPeucker(points.slice(0, index + 1), epsilon);
+            const recResults2 = this.douglasPeucker(points.slice(index), epsilon);
+            return [...recResults1.slice(0, -1), ...recResults2];
+        } else {
+            return [points[0], points[end]];
+        }
+    }
 }
