@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavMesh con CDT2D</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #00d4ff;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        canvas {
+            border: 2px solid #00d4ff;
+            background: #0f0f23;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button {
+            padding: 10px 20px;
+            background: #00d4ff;
+            border: none;
+            color: #1a1a2e;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #00a8cc;
+        }
+        .info {
+            background: #16213e;
+            padding: 15px;
+            border-radius: 10px;
+            max-width: 600px;
+        }
+        .info p {
+            margin: 5px 0;
+        }
+        label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>NavMesh Triangulation con CDT2D</h1>
+
+        <canvas id="canvas" width="1600" height="800"></canvas>
+
+        <div class="controls">
+            <button onclick="loadAndTriangulate()">Ricarica</button>
+            <label>
+                <input type="checkbox" id="showVertices" checked onchange="render()">
+                Mostra Vertici
+            </label>
+            <label>
+                <input type="checkbox" id="showEdges" checked onchange="render()">
+                Mostra Bordi
+            </label>
+            <label>
+                <input type="checkbox" id="showFill" checked onchange="render()">
+                Riempi Triangoli
+            </label>
+            <label>
+                <input type="checkbox" id="showCentroids" onchange="render()">
+                Mostra Centroidi
+            </label>
+            <label>
+                <input type="checkbox" id="mergePolygons" onchange="loadAndTriangulate()">
+                Merge Poligoni Convessi
+            </label>
+            <label>
+                <input type="checkbox" id="steinerPoints" onchange="loadAndTriangulate()">
+                Punti Steiner
+            </label>
+            <label>
+                Max Edge: <input type="number" id="maxEdgeLength" value="100" min="20" max="500" style="width:60px" onchange="loadAndTriangulate()">
+            </label>
+        </div>
+
+        <div class="info">
+            <p><strong>Vertici:</strong> <span id="vertexCount">-</span></p>
+            <p><strong>Triangoli/Poligoni:</strong> <span id="triangleCount">-</span></p>
+            <p><strong>Bordi Vincolo:</strong> <span id="edgeCount">-</span></p>
+        </div>
+    </div>
+
+    <script type="module">
+        import cdt2d from 'https://esm.sh/cdt2d@1.0.0';
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let points = [];
+        let triangles = [];
+        let polygons = []; // poligoni dopo il merge
+        let edges = [];
+        let inputData = null;
+
+        // Offset per centrare il disegno
+        const offsetX = 50;
+        const offsetY = 20;
+
+        // ============== FUNZIONE PUNTI STEINER ==============
+
+        function refineEdgesForTriangulation(polygon, holes, maxEdgeLength = 100) {
+            const newPolygon = [];
+            const newHoles = holes.map(() => []);
+
+            // Suddividi i lati troppo lunghi del poligono esterno
+            for (let i = 0; i < polygon.length; i++) {
+                const j = (i + 1) % polygon.length;
+                const p1 = polygon[i];
+                const p2 = polygon[j];
+                const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+
+                newPolygon.push({ x: p1.x, y: p1.y });
+
+                if (dist > maxEdgeLength) {
+                    const segments = Math.ceil(dist / maxEdgeLength);
+                    for (let k = 1; k < segments; k++) {
+                        const t = k / segments;
+                        newPolygon.push({
+                            x: p1.x + (p2.x - p1.x) * t,
+                            y: p1.y + (p2.y - p1.y) * t
+                        });
+                    }
+                }
+            }
+
+            // Stessa cosa per i buchi
+            holes.forEach((hole, idx) => {
+                for (let i = 0; i < hole.length; i++) {
+                    const j = (i + 1) % hole.length;
+                    const p1 = hole[i];
+                    const p2 = hole[j];
+                    const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+
+                    newHoles[idx].push({ x: p1.x, y: p1.y });
+
+                    if (dist > maxEdgeLength) {
+                        const segments = Math.ceil(dist / maxEdgeLength);
+                        for (let k = 1; k < segments; k++) {
+                            const t = k / segments;
+                            newHoles[idx].push({
+                                x: p1.x + (p2.x - p1.x) * t,
+                                y: p1.y + (p2.y - p1.y) * t
+                            });
+                        }
+                    }
+                }
+            });
+
+            return { polygon: newPolygon, holes: newHoles };
+        }
+
+        // ============== FUNZIONI DI MERGE ==============
+
+        function triangleArea(tri) {
+            const a = tri[0], b = tri[1], c = tri[2];
+            return Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+        }
+
+        function polygonArea(verts) {
+            let area = 0;
+            const n = verts.length;
+            for (let i = 0; i < n; i++) {
+                const j = (i + 1) % n;
+                area += verts[i][0] * verts[j][1];
+                area -= verts[j][0] * verts[i][1];
+            }
+            return Math.abs(area) / 2;
+        }
+
+        function edgeKey(i1, i2) {
+            return i1 < i2 ? `${i1}-${i2}` : `${i2}-${i1}`;
+        }
+
+        function buildAdjacency(polys) {
+            const edgeToPolygon = new Map();
+
+            for (let i = 0; i < polys.length; i++) {
+                const p = polys[i];
+                if (!p) continue;
+                p.neighbors = [];
+
+                const verts = p.vertices;
+                for (let j = 0; j < verts.length; j++) {
+                    const k = (j + 1) % verts.length;
+                    const key = edgeKey(verts[j], verts[k]);
+
+                    if (edgeToPolygon.has(key)) {
+                        const otherId = edgeToPolygon.get(key);
+                        if (otherId !== i) {
+                            p.neighbors.push(otherId);
+                            if (polys[otherId]) {
+                                polys[otherId].neighbors.push(i);
+                            }
+                        }
+                    } else {
+                        edgeToPolygon.set(key, i);
+                    }
+                }
+            }
+        }
+
+        function isGoodPolygon(poly, minArea, maxAspectRatio) {
+            if (poly.area < minArea) return false;
+
+            const verts = poly.vertices;
+            let maxEdge = 0;
+
+            for (let i = 0; i < verts.length; i++) {
+                const j = (i + 1) % verts.length;
+                const v1 = points[verts[i]];
+                const v2 = points[verts[j]];
+                const edge = Math.hypot(v2[0] - v1[0], v2[1] - v1[1]);
+                maxEdge = Math.max(maxEdge, edge);
+            }
+
+            // Per triangoli, calcola aspect ratio
+            if (verts.length === 3) {
+                const a = points[verts[0]], b = points[verts[1]], c = points[verts[2]];
+                const base = Math.hypot(b[0] - a[0], b[1] - a[1]);
+                const height = (2 * poly.area) / base;
+                if (height > 0 && maxEdge / height > maxAspectRatio) return false;
+            }
+
+            return true;
+        }
+
+        function findSharedEdge(verts1, verts2) {
+            // Trova l'edge condiviso tra due poligoni
+            // L'edge in verts1 va da verts1[i] a verts1[i+1]
+            // L'edge in verts2 va in direzione opposta: da verts2[j] a verts2[j+1]
+            // Quindi verts1[i] == verts2[j+1] e verts1[i+1] == verts2[j]
+            for (let i = 0; i < verts1.length; i++) {
+                const i2 = (i + 1) % verts1.length;
+                for (let j = 0; j < verts2.length; j++) {
+                    const j2 = (j + 1) % verts2.length;
+                    if (verts1[i] === verts2[j2] && verts1[i2] === verts2[j]) {
+                        return { i1: i, i2: i2, j1: j, j2: j2 };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function mergeVertices(verts1, verts2, shared) {
+            // Unisce due poligoni rimuovendo l'edge condiviso
+            // L'edge condiviso: verts1[i1]->verts1[i2] == verts2[j2]->verts2[j1] (direzioni opposte)
+            // Quindi: verts1[i1] == verts2[j2] e verts1[i2] == verts2[j1]
+            //
+            // Strategia: camminiamo lungo verts1, quando arriviamo a i1 inseriamo
+            // i vertici di verts2 che non sono sull'edge condiviso, poi continuiamo con verts1
+
+            const result = [];
+            const n1 = verts1.length;
+            const n2 = verts2.length;
+
+            for (let k = 0; k < n1; k++) {
+                result.push(verts1[k]);
+
+                // Dopo aver aggiunto i1, inseriamo i vertici di verts2
+                if (k === shared.i1) {
+                    // Inseriamo verts2 da (j2+1) fino a (j1-1), escludendo j1 e j2
+                    let idx = (shared.j2 + 1) % n2;
+                    let count = 0;
+                    while (idx !== shared.j1 && count < n2) {
+                        result.push(verts2[idx]);
+                        idx = (idx + 1) % n2;
+                        count++;
+                    }
+                }
+            }
+
+            // Rimuovi vertici collineari
+            return removeCollinearVertices(result);
+        }
+
+        function removeCollinearVertices(verts) {
+            if (verts.length <= 3) return verts;
+
+            const result = [];
+            const n = verts.length;
+
+            for (let i = 0; i < n; i++) {
+                const prev = points[verts[(i - 1 + n) % n]];
+                const curr = points[verts[i]];
+                const next = points[verts[(i + 1) % n]];
+
+                // Cross product per verificare collinearità
+                const cross = (curr[0] - prev[0]) * (next[1] - prev[1]) -
+                              (curr[1] - prev[1]) * (next[0] - prev[0]);
+
+                // Usa una soglia più alta per evitare problemi numerici
+                if (Math.abs(cross) > 1) {
+                    result.push(verts[i]);
+                }
+            }
+
+            return result.length >= 3 ? result : verts;
+        }
+
+        function isConvex(vertIndices) {
+            const n = vertIndices.length;
+            if (n < 3) return false;
+
+            let sign = 0;
+            for (let i = 0; i < n; i++) {
+                const p0 = points[vertIndices[i]];
+                const p1 = points[vertIndices[(i + 1) % n]];
+                const p2 = points[vertIndices[(i + 2) % n]];
+
+                const dx1 = p2[0] - p1[0];
+                const dy1 = p2[1] - p1[1];
+                const dx2 = p0[0] - p1[0];
+                const dy2 = p0[1] - p1[1];
+                const cross = dx1 * dy2 - dy1 * dx2;
+
+                if (Math.abs(cross) > 0.1) {
+                    if (sign === 0) sign = Math.sign(cross);
+                    else if (sign !== Math.sign(cross)) return false;
+                }
+            }
+            return true;
+        }
+
+        // Verifica se il poligono merged si sovrappone a un buco
+        function polygonOverlapsHole(vertIndices) {
+            // Calcola il centroide del poligono
+            let cx = 0, cy = 0;
+            for (const idx of vertIndices) {
+                cx += points[idx][0];
+                cy += points[idx][1];
+            }
+            cx /= vertIndices.length;
+            cy /= vertIndices.length;
+
+            // Verifica se il centroide è dentro un buco
+            for (const hole of inputData.holes) {
+                if (pointInPolygon(cx, cy, hole)) {
+                    return true;
+                }
+            }
+
+            // Verifica anche alcuni punti intermedi lungo i lati del poligono
+            for (let i = 0; i < vertIndices.length; i++) {
+                const j = (i + 1) % vertIndices.length;
+                const p1 = points[vertIndices[i]];
+                const p2 = points[vertIndices[j]];
+
+                // Punto medio del lato
+                const mx = (p1[0] + p2[0]) / 2;
+                const my = (p1[1] + p2[1]) / 2;
+
+                for (const hole of inputData.holes) {
+                    if (pointInPolygon(mx, my, hole)) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        function tryMerge(p1, p2) {
+            const shared = findSharedEdge(p1.vertices, p2.vertices);
+            if (!shared) return null;
+
+            const mergedVerts = mergeVertices(p1.vertices, p2.vertices, shared);
+            if (mergedVerts.length < 3) return null;
+
+            // Verifica che non si sovrapponga a un buco
+            if (polygonOverlapsHole(mergedVerts)) {
+                return null;
+            }
+
+            return {
+                vertices: mergedVerts,
+                area: p1.area + p2.area,
+                neighbors: [],
+                isConvex: true
+            };
+        }
+
+        function updateAdjacency(polys, keepIdx, removeIdx) {
+            // Rimuovi riferimenti al poligono eliminato
+            for (const p of polys) {
+                if (!p) continue;
+                p.neighbors = p.neighbors.filter(n => n !== removeIdx && n !== keepIdx);
+            }
+            // Ricostruisci adiacenza per il poligono modificato
+            polys[keepIdx].neighbors = [];
+
+            const verts = polys[keepIdx].vertices;
+            for (let i = 0; i < polys.length; i++) {
+                if (i === keepIdx || !polys[i]) continue;
+
+                const otherVerts = polys[i].vertices;
+                for (let j = 0; j < verts.length; j++) {
+                    const j2 = (j + 1) % verts.length;
+                    for (let k = 0; k < otherVerts.length; k++) {
+                        const k2 = (k + 1) % otherVerts.length;
+                        if (verts[j] === otherVerts[k2] && verts[j2] === otherVerts[k]) {
+                            if (!polys[keepIdx].neighbors.includes(i)) {
+                                polys[keepIdx].neighbors.push(i);
+                            }
+                            if (!polys[i].neighbors.includes(keepIdx)) {
+                                polys[i].neighbors.push(keepIdx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function mergeTrianglesToPolygons(tris, minArea = 100, maxAspectRatio = 4) {
+            // Converti triangoli (indici) in oggetti con metadati
+            let polys = tris.map((tri, idx) => ({
+                id: idx,
+                vertices: [...tri], // copia gli indici dei vertici
+                area: triangleArea([points[tri[0]], points[tri[1]], points[tri[2]]]),
+                neighbors: [],
+                isConvex: true
+            }));
+
+            buildAdjacency(polys);
+
+            let changed = true;
+            let iterations = 0;
+            const maxIterations = 1000;
+
+            while (changed && iterations < maxIterations) {
+                changed = false;
+                iterations++;
+
+                for (let i = 0; i < polys.length; i++) {
+                    const p1 = polys[i];
+                    if (!p1) continue;
+
+                    // Se il poligono è già "buono", salta
+                    if (isGoodPolygon(p1, minArea, maxAspectRatio)) continue;
+
+                    // Cerca un vicino con cui fondersi mantenendo convessità
+                    for (const neighborId of p1.neighbors) {
+                        const p2 = polys[neighborId];
+                        if (!p2) continue;
+
+                        const merged = tryMerge(p1, p2);
+                        if (merged && isConvex(merged.vertices)) {
+                            // Fondi!
+                            polys[i] = merged;
+                            polys[neighborId] = null;
+                            updateAdjacency(polys, i, neighborId);
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            console.log(`Merge completato in ${iterations} iterazioni`);
+            return polys.filter(p => p !== null).map(p => p.vertices);
+        }
+
+        // ============== FINE FUNZIONI DI MERGE ==============
+
+        async function loadAndTriangulate() {
+            try {
+                // Carica il file JSON
+                const response = await fetch('input.json');
+                inputData = await response.json();
+
+                // Applica punti Steiner se attivo
+                const useSteiner = document.getElementById('steinerPoints').checked;
+                const maxEdgeLength = parseInt(document.getElementById('maxEdgeLength').value) || 100;
+
+                let outerPolygon = inputData.outer;
+                let holesPolygons = inputData.holes;
+
+                if (useSteiner) {
+                    const refined = refineEdgesForTriangulation(outerPolygon, holesPolygons, maxEdgeLength);
+                    outerPolygon = refined.polygon;
+                    holesPolygons = refined.holes;
+                    console.log(`Punti Steiner: outer ${inputData.outer.length} -> ${outerPolygon.length}`);
+                }
+
+                // Prepara i punti e i vincoli per cdt2d
+                points = [];
+                edges = [];
+
+                // Aggiungi i punti del poligono esterno
+                const outerStartIdx = 0;
+                for (const p of outerPolygon) {
+                    points.push([p.x, p.y]);
+                }
+
+                // Crea i vincoli per il bordo esterno (loop chiuso)
+                const outerLen = outerPolygon.length;
+                for (let i = 0; i < outerLen; i++) {
+                    edges.push([outerStartIdx + i, outerStartIdx + ((i + 1) % outerLen)]);
+                }
+
+                // Aggiungi i buchi
+                for (const hole of holesPolygons) {
+                    const holeStartIdx = points.length;
+
+                    for (const p of hole) {
+                        points.push([p.x, p.y]);
+                    }
+
+                    // Crea i vincoli per il buco (loop chiuso)
+                    const holeLen = hole.length;
+                    for (let i = 0; i < holeLen; i++) {
+                        edges.push([holeStartIdx + i, holeStartIdx + ((i + 1) % holeLen)]);
+                    }
+                }
+
+                console.log('Punti:', points.length);
+                console.log('Vincoli:', edges.length);
+
+                // Esegui la triangolazione CDT
+                triangles = cdt2d(points, edges, { exterior: false });
+
+                // Filtra i triangoli che cadono dentro i buchi
+                triangles = filterTrianglesInHoles(triangles);
+
+                console.log('Triangoli generati:', triangles.length);
+
+                // Applica merge se attivo
+                const doMerge = document.getElementById('mergePolygons').checked;
+                if (doMerge) {
+                    polygons = mergeTrianglesToPolygons(triangles);
+                    console.log('Poligoni dopo merge:', polygons.length);
+                } else {
+                    polygons = triangles;
+                }
+
+                // Aggiorna info
+                document.getElementById('vertexCount').textContent = points.length;
+                document.getElementById('triangleCount').textContent = polygons.length;
+                document.getElementById('edgeCount').textContent = edges.length;
+
+                render();
+
+            } catch (error) {
+                console.error('Errore:', error);
+                alert('Errore nel caricamento: ' + error.message);
+            }
+        }
+
+        // Funzione per verificare se un punto è dentro un poligono
+        function pointInPolygon(px, py, polygon) {
+            let inside = false;
+            const n = polygon.length;
+
+            for (let i = 0, j = n - 1; i < n; j = i++) {
+                const xi = polygon[i].x, yi = polygon[i].y;
+                const xj = polygon[j].x, yj = polygon[j].y;
+
+                if (((yi > py) !== (yj > py)) &&
+                    (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+                    inside = !inside;
+                }
+            }
+
+            return inside;
+        }
+
+        // Filtra i triangoli che hanno il centroide dentro un buco
+        function filterTrianglesInHoles(tris) {
+            return tris.filter(tri => {
+                // Calcola il centroide del triangolo
+                const p0 = points[tri[0]];
+                const p1 = points[tri[1]];
+                const p2 = points[tri[2]];
+
+                const cx = (p0[0] + p1[0] + p2[0]) / 3;
+                const cy = (p0[1] + p1[1] + p2[1]) / 3;
+
+                // Verifica se il centroide è fuori dal poligono esterno
+                if (!pointInPolygon(cx, cy, inputData.outer)) {
+                    return false;
+                }
+
+                // Verifica se il centroide è dentro uno dei buchi
+                for (const hole of inputData.holes) {
+                    if (pointInPolygon(cx, cy, hole)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const showVertices = document.getElementById('showVertices').checked;
+            const showEdges = document.getElementById('showEdges').checked;
+            const showFill = document.getElementById('showFill').checked;
+            const showCentroids = document.getElementById('showCentroids').checked;
+
+            // Disegna i poligoni riempiti
+            if (showFill) {
+                for (let i = 0; i < polygons.length; i++) {
+                    const poly = polygons[i];
+
+                    // Colore basato sull'indice
+                    const hue = (i * 37) % 360;
+                    ctx.fillStyle = `hsla(${hue}, 70%, 50%, 0.3)`;
+
+                    ctx.beginPath();
+                    const firstPt = points[poly[0]];
+                    ctx.moveTo(firstPt[0] + offsetX, firstPt[1] + offsetY);
+                    for (let j = 1; j < poly.length; j++) {
+                        const pt = points[poly[j]];
+                        ctx.lineTo(pt[0] + offsetX, pt[1] + offsetY);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+
+            // Disegna i bordi dei poligoni
+            if (showEdges) {
+                ctx.strokeStyle = '#00d4ff';
+                ctx.lineWidth = 1;
+
+                for (const poly of polygons) {
+                    ctx.beginPath();
+                    const firstPt = points[poly[0]];
+                    ctx.moveTo(firstPt[0] + offsetX, firstPt[1] + offsetY);
+                    for (let j = 1; j < poly.length; j++) {
+                        const pt = points[poly[j]];
+                        ctx.lineTo(pt[0] + offsetX, pt[1] + offsetY);
+                    }
+                    ctx.closePath();
+                    ctx.stroke();
+                }
+            }
+
+            // Disegna i bordi vincolo (poligono esterno e buchi)
+            ctx.strokeStyle = '#ff6b6b';
+            ctx.lineWidth = 3;
+
+            for (const edge of edges) {
+                const p0 = points[edge[0]];
+                const p1 = points[edge[1]];
+
+                ctx.beginPath();
+                ctx.moveTo(p0[0] + offsetX, p0[1] + offsetY);
+                ctx.lineTo(p1[0] + offsetX, p1[1] + offsetY);
+                ctx.stroke();
+            }
+
+            // Disegna i vertici
+            if (showVertices) {
+                ctx.fillStyle = '#ffdd59';
+                for (const p of points) {
+                    ctx.beginPath();
+                    ctx.arc(p[0] + offsetX, p[1] + offsetY, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            // Disegna i centroidi dei poligoni
+            if (showCentroids) {
+                ctx.fillStyle = '#00ff88';
+                for (const poly of polygons) {
+                    let cx = 0, cy = 0;
+                    for (const idx of poly) {
+                        cx += points[idx][0];
+                        cy += points[idx][1];
+                    }
+                    cx /= poly.length;
+                    cy /= poly.length;
+
+                    ctx.beginPath();
+                    ctx.arc(cx + offsetX, cy + offsetY, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Esporta funzioni per gli eventi inline
+        window.loadAndTriangulate = loadAndTriangulate;
+        window.render = render;
+
+        // Carica automaticamente all'avvio
+        loadAndTriangulate();
+    </script>
+</body>
+</html>

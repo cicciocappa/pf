@@ -195,6 +195,68 @@ export class Wall {
         return l < 0.0001 ? { x: 0, y: 0 } : { x: v.x / l, y: v.y / l };
     }
 
+    /**
+     * Restituisce il contorno esterno della mura come singolo poligono.
+     * Ignora le suddivisioni interne (units) e restituisce solo la forma generale.
+     */
+    getOutline() {
+        if (this.points.length < 2) return [];
+
+        const thicknessPoints = this.calculateThicknessPoints();
+
+        // Costruiamo il contorno: lato sinistro in avanti, lato destro all'indietro
+        const outline = [];
+
+        // Aggiungi tutti i punti "left" (con eventuale override per start/end)
+        for (let i = 0; i < thicknessPoints.length; i++) {
+            if (i === 0 && this.startCapOverride) {
+                outline.push({ x: this.startCapOverride.left.x, y: this.startCapOverride.left.y });
+            } else if (i === thicknessPoints.length - 1 && this.endCapOverride) {
+                outline.push({ x: this.endCapOverride.left.x, y: this.endCapOverride.left.y });
+            } else {
+                outline.push({ x: thicknessPoints[i].left.x, y: thicknessPoints[i].left.y });
+            }
+        }
+
+        // Aggiungi tutti i punti "right" in ordine inverso
+        for (let i = thicknessPoints.length - 1; i >= 0; i--) {
+            if (i === thicknessPoints.length - 1 && this.endCapOverride) {
+                outline.push({ x: this.endCapOverride.right.x, y: this.endCapOverride.right.y });
+            } else if (i === 0 && this.startCapOverride) {
+                outline.push({ x: this.startCapOverride.right.x, y: this.startCapOverride.right.y });
+            } else {
+                outline.push({ x: thicknessPoints[i].right.x, y: thicknessPoints[i].right.y });
+            }
+        }
+        console.log(outline);
+        return outline;
+    }
+
+    /**
+     * Restituisce il contorno esterno con i vertici di ogni suddivisione (unit).
+     * Utile per la triangolazione navmesh quando si vogliono punti Steiner.
+     */
+    getOutlineDetailed() {
+        if (this.units.length === 0) return this.getOutline();
+
+        const outline = [];
+
+        // Lato sinistro: vertice 0 di ogni unit, poi vertice 1 dell'ultima
+        for (let i = 0; i < this.units.length; i++) {
+            outline.push({ x: this.units[i].vertices[0].x, y: this.units[i].vertices[0].y });
+        }
+        const lastUnit = this.units[this.units.length - 1];
+        outline.push({ x: lastUnit.vertices[1].x, y: lastUnit.vertices[1].y });
+
+        // Lato destro in ordine inverso: vertice 2 dell'ultima, poi vertice 3 di ogni unit
+        outline.push({ x: lastUnit.vertices[2].x, y: lastUnit.vertices[2].y });
+        for (let i = this.units.length - 1; i >= 0; i--) {
+            outline.push({ x: this.units[i].vertices[3].x, y: this.units[i].vertices[3].y });
+        }
+
+        return outline;
+    }
+
     toJSON() {
         return {
             id: this.id,

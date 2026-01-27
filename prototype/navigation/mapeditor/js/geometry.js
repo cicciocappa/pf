@@ -35,6 +35,19 @@ export class Geometry {
     }
 
     /**
+     * Simplify polygon using Douglas-Peucker algorithm (static version)
+     * @param {Array<{x,y}>} polygon - Polygon vertices
+     * @param {number} epsilon - Simplification tolerance (default 1.0)
+     * @returns {Array<{x,y}>} Simplified polygon
+     */
+    static simplifyPolygon(polygon, epsilon = 1.0) {
+        if (!polygon || polygon.length < 3) return polygon;
+
+        const geometry = new Geometry();
+        return geometry.douglasPeucker(polygon, epsilon);
+    }
+
+    /**
      * Check if a point is inside a polygon using ray-casting
      */
     static isPointInPolygon(x, y, vertices) {
@@ -692,5 +705,35 @@ export class Geometry {
         } else {
             return [points[0], points[end]];
         }
+    }
+
+    /**
+     * Calculate perpendicular distance from a point to a line segment
+     * @param {Object} point - The point {x, y}
+     * @param {Object} lineStart - Line start point {x, y}
+     * @param {Object} lineEnd - Line end point {x, y}
+     * @returns {number} Perpendicular distance
+     */
+    perpendicularDistance(point, lineStart, lineEnd) {
+        const dx = lineEnd.x - lineStart.x;
+        const dy = lineEnd.y - lineStart.y;
+
+        // Line length squared
+        const lineLengthSq = dx * dx + dy * dy;
+
+        if (lineLengthSq === 0) {
+            // Line start and end are the same point
+            return Math.sqrt((point.x - lineStart.x) ** 2 + (point.y - lineStart.y) ** 2);
+        }
+
+        // Calculate the perpendicular distance using the formula:
+        // |Ax + By + C| / sqrt(A^2 + B^2)
+        // Where the line equation is Ax + By + C = 0
+        const numerator = Math.abs(
+            dy * point.x - dx * point.y + lineEnd.x * lineStart.y - lineEnd.y * lineStart.x
+        );
+        const denominator = Math.sqrt(lineLengthSq);
+
+        return numerator / denominator;
     }
 }

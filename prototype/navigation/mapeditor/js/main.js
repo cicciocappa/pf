@@ -123,7 +123,7 @@ function bindFileButtons() {
     // Export navmesh
     const exportNavmeshBtn = document.getElementById('btn-export-navmesh');
     if (exportNavmeshBtn) {
-        exportNavmeshBtn.addEventListener('click', () => editor.exportNavMesh());
+        exportNavmeshBtn.addEventListener('click', () => editor.exportNavInputData());
     }
 }
 

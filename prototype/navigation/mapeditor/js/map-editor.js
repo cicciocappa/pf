@@ -1,4 +1,5 @@
 import { Geometry } from './geometry.js';
+import { Rasterizer } from './rasterizer.js';
 import { MapData } from './models/map-data.js';
 import { Renderer } from './renderer.js';
 import { HistoryManager } from './history-manager.js';
@@ -8,7 +9,6 @@ import { BuildingTool } from './tools/building-tool.js';
 import { WallTool } from './tools/wall-tool.js';
 import { EditTool } from './tools/edit-tool.js';
 import { ObstacleTool } from './tools/obstacle-tool.js';
- 
 
 /**
  * MapEditor - Main editor class
@@ -591,6 +591,65 @@ export class MapEditor {
         }
     }
 
+
+    bake2() {
+        console.log('Bake Process');
+        const cellSize = 10; // Risoluzione della griglia
+        const agentRadius = 8; // Raggio dell'agente
+
+        // 1. Inizializza il Rasterizer
+        const rasterizer = new Rasterizer(this, cellSize);
+
+        // 2. Genera la griglia di occupazione
+        // Questo passaggio "fonde" già muri ed edifici vicini
+        const { grid, cols, rows } = rasterizer.rasterize(agentRadius);
+
+        // 3. Estrae i contorni grezzi (scalettati)
+        const rawContours = rasterizer.extractContours();
+        if (rawContours.length === 0) return;
+
+        // 4. Semplifica i contorni (Douglas-Peucker)
+        // Trasforma i "pixel" in linee rette pulite
+        const simplifiedPolygons = rawContours.map(poly =>
+            this.geometry.douglasPeucker(poly, cellSize * 0.7)
+        );
+
+        // 5. Organizza in Outer e Holes
+        // Il poligono con l'area maggiore è solitamente il confine esterno calpestabile
+        simplifiedPolygons.sort((a, b) =>
+            Math.abs(this.geometry.signedArea(b)) - Math.abs(this.geometry.signedArea(a))
+        );
+
+        const outerBoundary = simplifiedPolygons[0];
+        const holes = simplifiedPolygons.slice(1);
+
+        // 6. Triangolazione e Merging Convesso
+        // Passiamo i poligoni "puliti" dalla griglia a poly2tri
+        const result = this.geometry.generateNavMesh(outerBoundary, holes, {
+            mergeTriangles: true,
+            agentRadius: 0, // Impostiamo a 0 perché l'abbiamo già calcolato nel rasterizer!
+            gridStep: 0     // Non servono più Steiner points, la griglia ha già regolarizzato tutto
+        });
+
+        console.log(result);
+
+        // 7. Salvataggio e Render
+        this.navmesh = {
+            triangles: result.triangles,
+            merged: result.polygons
+        };
+        this.render();
+
+        console.log('Bake Process');
+        console.log(`NavMesh generata: ${result.polygons.length} poligoni convessi.`);
+    }
+
+
+
+
+
+
+
     /**
      * Calculate signed area
      */
@@ -729,6 +788,11 @@ export class MapEditor {
         };
 
         this.downloadJson(data, 'navmesh.json');
+    }
+
+    exportNavInputData(){
+        const data = this.mapData.getNavInputData();
+        this.downloadJson(data, 'input.json');
     }
 
     /**

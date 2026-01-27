@@ -1,0 +1,1509 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavGraph Generator - Recast-like</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toolbar {
+            background: #16213e;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            border-bottom: 1px solid #0f3460;
+            flex-wrap: wrap;
+        }
+
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toolbar-group label {
+            font-size: 13px;
+            color: #aaa;
+        }
+
+        .toolbar-group input[type="number"] {
+            width: 60px;
+            padding: 6px 8px;
+            background: #0a0a1a;
+            border: 1px solid #0f3460;
+            color: #eee;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .btn {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #1a4a7a;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #1a4a7a;
+        }
+
+        .btn.active {
+            background: #e94560;
+            border-color: #e94560;
+        }
+
+        .btn.generate {
+            background: #0a8a50;
+            border-color: #0a8a50;
+        }
+
+        .btn.generate:hover {
+            background: #0ca060;
+        }
+
+        .separator {
+            width: 1px;
+            height: 30px;
+            background: #0f3460;
+            margin: 0 8px;
+        }
+
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .info-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.6;
+            max-width: 280px;
+        }
+
+        .info-panel strong {
+            color: #e94560;
+        }
+
+        .info-panel .section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #0f3460;
+        }
+
+        .status-bar {
+            background: #0f0f1a;
+            padding: 8px 20px;
+            font-size: 12px;
+            color: #888;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-label {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #1a4a7a;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .file-label:hover {
+            background: #1a4a7a;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .checkbox-group input {
+            width: 14px;
+            height: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="toolbar">
+        <div class="toolbar-group">
+            <input type="file" id="file-input" accept=".json">
+            <label for="file-input" class="file-label">Load JSON</label>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <label>Agent Radius:</label>
+            <input type="number" id="agent-radius" value="12" min="0" max="50">
+        </div>
+
+        <div class="toolbar-group">
+            <label>Simplify:</label>
+            <input type="number" id="simplify-threshold" value="1" min="0" max="20" step="0.5">
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button class="btn generate" id="btn-generate">Generate NavGraph</button>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <label>View:</label>
+            <div class="checkbox-group">
+                <input type="checkbox" id="show-contours">
+                <label for="show-contours">Offset Contours</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="show-navgraph" checked>
+                <label for="show-navgraph">NavGraph</label>
+            </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button class="btn" id="btn-export">Export NavGraph</button>
+        </div>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="canvas"></canvas>
+        <div class="info-panel">
+            <div><strong>NavGraph Generator</strong></div>
+            <div class="section">
+                <strong>Controls:</strong><br>
+                Alt + Wheel: Zoom<br>
+                Middle Mouse / Space + Drag: Pan
+            </div>
+            <div class="section">
+                <strong>Pipeline:</strong><br>
+                1. Load geometry (outer + holes)<br>
+                2. Offset by agent radius<br>
+                3. Simplify contours<br>
+                4. Triangulate with holes<br>
+                5. Merge into convex polygons
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <span id="status-text">Load a JSON file to begin</span>
+        <span id="stats-text"></span>
+    </div>
+
+    <script>
+        // ============================================
+        // Visibility Graph Generator (NavGraph)
+        // ============================================
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // State
+        let mapData = null;
+
+        // Qui salveremo la geometria espansa e il grafo
+        let processedGeometry = {
+            outer: [],
+            holes: [], // Gli ostacoli espansi
+            allVertices: [] // Tutti i potenziali nodi del grafo
+        };
+
+        let visibilityGraph = {
+            nodes: [],
+            edges: []
+        };
+
+        // Camera
+        const camera = {
+            offsetX: 50,
+            offsetY: 50,
+            zoom: 1.0
+        };
+
+        let isPanning = false;
+        let panStart = { x: 0, y: 0 };
+        let spacePressed = false;
+
+        // Sostituisci 'let agent = {...}' con:
+        let agents = [];
+
+        // Funzione helper per creare un agente
+        function spawnAgent(x, y) {
+            agents.push({
+                id: agents.length,
+                pos: { x, y },
+                vel: { x: 0, y: 0 },
+                path: [],
+                radius: 12, // Raggio fisico
+                maxSpeed: 3.5 + Math.random(), // Leggera variabilità per evitare sincronizzazione perfetta
+                maxForce: 0.15,
+                color: `hsl(${Math.random() * 360}, 70%, 50%)` // Colore unico per debug
+            });
+        }
+        let targetPos = null;
+        let lastTime = 0;
+
+        // ============================================
+        // Initialization & Events (INVARIATI)
+        // ============================================
+
+        function init() {
+            resize();
+            bindEvents();
+            render();
+            updateStatus('Ready. Load a JSON map.');
+            requestAnimationFrame(gameLoop); // Avvia il loop
+        }
+
+        function resize() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            render();
+        }
+
+        function bindEvents() {
+            window.addEventListener('resize', resize);
+            document.getElementById('file-input').addEventListener('change', handleFileLoad);
+            document.getElementById('btn-generate').addEventListener('click', generateGraph);
+            // document.getElementById('btn-export').addEventListener('click', exportGraph); // TODO
+
+            ['show-contours', 'show-navgraph'].forEach(id => {
+                document.getElementById(id).addEventListener('change', render);
+            });
+
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('contextmenu', handleRightClick);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('wheel', handleWheel, { passive: false });
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('keyup', handleKeyUp);
+
+        }
+
+        // ============================================
+        // Core Logic: Graph Generation
+        // ============================================
+
+        function generateGraph() {
+            if (!mapData) {
+                alert('Please load a JSON file first');
+                return;
+            }
+
+            const startTime = performance.now();
+            updateStatus('Generating Visibility Graph...');
+
+            const agentRadius = parseInt(document.getElementById('agent-radius').value) || 0;
+            // Aggiungiamo un piccolo margine extra per sicurezza numerica
+            const margin = 0.1;
+            const totalOffset = agentRadius + margin;
+
+            // 1. ESPANSIONE OSTACOLI (Minkowski Sum)
+            // ------------------------------------------------
+            // L'area esterna (outer) si restringe (offset negativo)
+            // Gli ostacoli (holes) si espandono (offset positivo)
+
+            let rawOuter = mapData.outer.map(p => ({ x: p.x, y: p.y }));
+            let rawHoles = (mapData.holes || []).map(h => h.map(p => ({ x: p.x, y: p.y })));
+
+            // Assicuriamo il winding corretto per l'algoritmo di offset
+            // Outer deve essere CCW, Holes devono essere CCW (la funzione offset gestisce il segno)
+            rawOuter = ensureCCW(rawOuter);
+            rawHoles = rawHoles.map(h => ensureCCW(h)); // OffsetPolygon assume CCW in input
+
+            // Calcolo geometria espansa
+            const expandedOuter = offsetPolygon(rawOuter, -totalOffset); // Shrink
+            const expandedHoles = rawHoles.map(h => offsetPolygon(h, totalOffset)); // Expand
+
+            // Semplificazione (opzionale, per ridurre i nodi)
+            const simplifyThreshold = parseFloat(document.getElementById('simplify-threshold').value) || 0;
+            processedGeometry.outer = simplifyContour(expandedOuter, simplifyThreshold);
+            processedGeometry.holes = expandedHoles.map(h => simplifyContour(h, simplifyThreshold));
+
+            // 2. ESTRAZIONE NODI
+            // ------------------------------------------------
+            // I nodi del grafo sono i vertici della geometria espansa
+            let nodes = [];
+            let nodeIdCounter = 0;
+
+            // Helper per aggiungere nodi
+            const addNodesFromPoly = (poly) => {
+                poly.forEach(p => {
+                    nodes.push({
+                        id: nodeIdCounter++,
+                        x: p.x,
+                        y: p.y,
+                        neighbors: [] // Lista di adiacenza
+                    });
+                });
+            };
+
+            addNodesFromPoly(processedGeometry.outer);
+            processedGeometry.holes.forEach(h => addNodesFromPoly(h));
+
+            console.log(`Extracted ${nodes.length} nodes.`);
+
+            let edges = [];
+
+            // ... (dopo il console.log(`Extracted ${nodes.length} nodes.`)) ...
+
+            // 2.1 AGGIUNTA ARCHI DI CONTORNO (I Muri sono strade!)
+            // ------------------------------------------------
+            // Dobbiamo collegare i vertici consecutivi di ogni poligono.
+            // Poiché l'array 'nodes' è piatto, usiamo un indice progressivo per sapere
+            // quale gruppo di nodi appartiene a quale poligono.
+
+            let currentNodeIndex = 0;
+
+            const addContourEdges = (poly) => {
+                const numVertices = poly.length;
+                if (numVertices < 2) {
+                    currentNodeIndex += numVertices;
+                    return;
+                }
+
+                // Per ogni vertice del poligono
+                for (let i = 0; i < numVertices; i++) {
+                    // Indice corrente nel grande array 'nodes'
+                    const idxA = currentNodeIndex + i;
+                    // Indice del prossimo (con loop all'inizio per chiudere il poligono)
+                    const idxB = currentNodeIndex + ((i + 1) % numVertices);
+
+                    const nodeA = nodes[idxA];
+                    const nodeB = nodes[idxB];
+
+                    const dist = Math.hypot(nodeB.x - nodeA.x, nodeB.y - nodeA.y);
+
+                    // Aggiungi l'arco bidirezionale
+                    // NOTA: I lati del poligono sono SEMPRE percorribili (è il perimetro della zona sicura)
+                    edges.push({ from: nodeA, to: nodeB, cost: dist });
+
+                    // Fondamentale per A*: aggiornare i vicini
+                    nodeA.neighbors.push({ node: nodeB, cost: dist });
+                    nodeB.neighbors.push({ node: nodeA, cost: dist });
+                }
+
+                // Avanziamo l'indice globale
+                currentNodeIndex += numVertices;
+            };
+
+            // Applica ai contorni esterni ed interni nello stesso ordine di creazione dei nodi
+            addContourEdges(processedGeometry.outer);
+            processedGeometry.holes.forEach(h => addContourEdges(h));
+
+            // ... (ora prosegui con il Passo 3: Doppio loop per la visibilità) ...
+
+            // 3. COSTRUZIONE ARCHI (VISIBILITÀ)
+            // ------------------------------------------------
+            // Colleghiamo ogni coppia di nodi se visibili
+
+
+
+            // Ottimizzazione: Raccogliamo tutti i segmenti che bloccano la vista
+            // Questi sono i lati della geometria espansa
+            const blockingSegments = [];
+            const addSegments = (poly) => {
+                for (let i = 0; i < poly.length; i++) {
+                    blockingSegments.push({
+                        p1: poly[i],
+                        p2: poly[(i + 1) % poly.length]
+                    });
+                }
+            };
+            addSegments(processedGeometry.outer);
+            processedGeometry.holes.forEach(h => addSegments(h));
+
+            // Doppio loop per controllare la visibilità (O(N^2))
+            // Per mappe enormi si usano QuadTree, ma per <1000 nodi va bene
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const nodeA = nodes[i];
+                    const nodeB = nodes[j];
+
+                    // Distanza Euclidea
+                    const dist = Math.hypot(nodeB.x - nodeA.x, nodeB.y - nodeA.y);
+
+                    // Verifica Visibilità
+                    if (checkVisibility(nodeA, nodeB, blockingSegments, processedGeometry)) {
+                        // Aggiungi arco (bidirezionale)
+                        edges.push({ from: nodeA, to: nodeB, cost: dist });
+                        nodeA.neighbors.push({ node: nodeB, cost: dist });
+                        nodeB.neighbors.push({ node: nodeA, cost: dist });
+                    }
+                }
+            }
+
+            visibilityGraph = { nodes, edges };
+
+            const elapsed = ((performance.now() - startTime) / 1000).toFixed(3);
+            updateStatus(`Graph generated: ${nodes.length} nodes, ${edges.length} edges in ${elapsed}s`);
+            updateStats(`Geometry: ${processedGeometry.holes.length} obstacles`);
+            render();
+        }
+
+        // ============================================
+        // Visibility Check Logic (CRITICO)
+        // ============================================
+
+        function checkVisibility(p1, p2, segments, geometry) {
+            // 1. Controlla intersezioni con i muri
+            // Usiamo un epsilon piccolo per evitare falsi positivi sugli endpoint
+            const epsilon = 0.001;
+
+            for (const seg of segments) {
+                // Se i segmenti condividono un vertice, non si intersecano (sono adiacenti)
+                if (pointsClose(p1, seg.p1) || pointsClose(p1, seg.p2) ||
+                    pointsClose(p2, seg.p1) || pointsClose(p2, seg.p2)) {
+                    continue;
+                }
+
+                if (segmentsIntersect(p1, p2, seg.p1, seg.p2)) {
+                    return false; // Vista bloccata
+                }
+            }
+
+            // 2. Controlla se il punto medio è "calpestabile"
+            // Questo serve per evitare di connettere due vertici dello stesso ostacolo
+            // passando ATTRAVERSO l'ostacolo (es. in un ostacolo a forma di U)
+            const midPoint = {
+                x: (p1.x + p2.x) / 2,
+                y: (p1.y + p2.y) / 2
+            };
+
+            if (!isPointWalkable(midPoint, geometry)) {
+                return false;
+            }
+
+            return true;
+        }
+
+        function isPointWalkable(p, geometry) {
+            // Deve essere DENTRO l'outer boundary
+            if (!isPointInPolygon(p.x, p.y, geometry.outer)) return false;
+
+            // Deve essere FUORI da tutti gli holes espansi
+            for (const hole of geometry.holes) {
+                if (isPointInPolygon(p.x, p.y, hole)) return false;
+            }
+            return true;
+        }
+
+        // ============================================
+        // Utility Geometry Functions (Dal tuo codice + Adattamenti)
+        // ============================================
+
+        // Offset polygon (Positive = Outward/Expand, Negative = Inward/Shrink)
+        // Nota: Richiede input CCW per espansione esterna positiva
+        function offsetPolygon(polygon, distance) {
+            if (polygon.length < 3) return polygon;
+            const result = [];
+            for (let i = 0; i < polygon.length; i++) {
+                const prev = polygon[(i - 1 + polygon.length) % polygon.length];
+                const curr = polygon[i];
+                const next = polygon[(i + 1) % polygon.length];
+
+                const edge1 = { x: curr.x - prev.x, y: curr.y - prev.y };
+                const edge2 = { x: next.x - curr.x, y: next.y - curr.y };
+
+                const len1 = Math.hypot(edge1.x, edge1.y);
+                const len2 = Math.hypot(edge2.x, edge2.y);
+
+                if (len1 < 0.001 || len2 < 0.001) { result.push({ ...curr }); continue; }
+
+                // Normali (verso destra rispetto alla direzione di percorrenza per offset positivo su CCW? 
+                // No, standard polygon offset usa bisettrice)
+                // Calcoliamo le normali esterne
+                const n1 = { x: edge1.y / len1, y: -edge1.x / len1 }; // Normale a destra
+                const n2 = { x: edge2.y / len2, y: -edge2.x / len2 };
+
+                // Bisettrice
+                let nx = n1.x + n2.x;
+                let ny = n1.y + n2.y;
+                let nlen = Math.hypot(nx, ny);
+
+                // Gestione angoli piatti o quasi
+                if (nlen < 0.001) {
+                    // fallback alla normale semplice
+                    nx = n1.x; ny = n1.y; nlen = 1;
+                }
+
+                // Calcolo estensione miter limitata
+                // dot product tra normale segmento e bisettrice
+                const dot = n1.x * (nx / nlen) + n1.y * (ny / nlen);
+                const scale = dot > 0.1 ? 1 / dot : 1;
+                const limit = 5.0; // Miter limit per evitare punte infinite
+                const finalScale = Math.min(scale, limit);
+
+                result.push({
+                    x: curr.x + (nx / nlen) * distance * finalScale,
+                    y: curr.y + (ny / nlen) * distance * finalScale
+                });
+            }
+            return result;
+        }
+
+        function simplifyContour(contour, tolerance) {
+            if (tolerance <= 0 || contour.length <= 3) return contour;
+            // Versione molto semplice basata sulla distanza
+            const result = [contour[0]];
+            for (let i = 1; i < contour.length; i++) {
+                const last = result[result.length - 1];
+                const curr = contour[i];
+                if (Math.hypot(curr.x - last.x, curr.y - last.y) > tolerance) {
+                    result.push(curr);
+                }
+            }
+            // Assicuriamo chiusura corretta se serve, o lasciamo così
+            return result;
+        }
+
+        function isPointInPolygon(x, y, polygon) {
+            let inside = false;
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const xi = polygon[i].x, yi = polygon[i].y;
+                const xj = polygon[j].x, yj = polygon[j].y;
+                const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        function segmentsIntersect(a, b, c, d) {
+            const orientation = (p, q, r) => {
+                const val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+                if (Math.abs(val) < 0.001) return 0; // Collinear
+                return (val > 0) ? 1 : 2; // Clockwise or Counterclockwise
+            };
+
+            const o1 = orientation(a, b, c);
+            const o2 = orientation(a, b, d);
+            const o3 = orientation(c, d, a);
+            const o4 = orientation(c, d, b);
+
+            if (o1 !== o2 && o3 !== o4) return true;
+            return false;
+        }
+
+        function ensureCCW(polygon) {
+            let area = 0;
+            for (let i = 0; i < polygon.length; i++) {
+                const j = (i + 1) % polygon.length;
+                area += polygon[i].x * polygon[j].y;
+                area -= polygon[j].x * polygon[i].y;
+            }
+            return area < 0 ? polygon.reverse() : polygon; // Se area negativa (CW), reverse
+        }
+
+        function pointsClose(p1, p2, tolerance = 0.1) {
+            return Math.abs(p1.x - p2.x) < tolerance && Math.abs(p1.y - p2.y) < tolerance;
+        }
+
+        // ============================================
+        // File Loading & Rendering (Invariati o Adattati)
+        // ============================================
+
+        function handleFileLoad(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    mapData = JSON.parse(event.target.result);
+                    visibilityGraph = { nodes: [], edges: [] };
+                    processedGeometry = { outer: [], holes: [] };
+                    fitToView();
+                    updateStatus(`Loaded: ${file.name}`);
+                    render();
+                } catch (err) { alert('Error parsing JSON'); }
+            };
+            reader.readAsText(file);
+        }
+
+        function fitToView() {
+            if (!mapData || mapData.outer.length === 0) return;
+            const xs = mapData.outer.map(p => p.x);
+            const ys = mapData.outer.map(p => p.y);
+            const minX = Math.min(...xs), maxX = Math.max(...xs);
+            const minY = Math.min(...ys), maxY = Math.max(...ys);
+            const padding = 80;
+            const scaleX = (canvas.width - padding * 2) / (maxX - minX);
+            const scaleY = (canvas.height - padding * 2) / (maxY - minY);
+            camera.zoom = Math.min(scaleX, scaleY, 2);
+            camera.offsetX = padding - minX * camera.zoom;
+            camera.offsetY = padding - minY * camera.zoom;
+        }
+
+        function render() {
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(camera.offsetX, camera.offsetY);
+            ctx.scale(camera.zoom, camera.zoom);
+
+            // Draw Background Grid (Facoltativo)
+            drawGrid();
+
+            if (mapData) {
+                // 1. Draw Original Geometry (Ghosted)
+                drawPolygon(mapData.outer, '#4a9eff40', null, 2);
+                (mapData.holes || []).forEach(h => drawPolygon(h, '#e9456040', null, 2));
+
+                // 2. Draw Processed Geometry (Contours con offset)
+                if (document.getElementById('show-contours').checked) {
+                    if (processedGeometry.outer.length) drawPolygon(processedGeometry.outer, '#4a9eff', null, 2);
+                    processedGeometry.holes.forEach(h => drawPolygon(h, '#e94560', '#e9456020', 2));
+                }
+
+                // 3. Draw Graph
+                if (document.getElementById('show-navgraph').checked) {
+                    drawGraph();
+                }
+            }
+            // ... dopo aver disegnato mappa e grafo
+            agents.forEach((agent) => {
+                if (agent.pos) {
+                    // Disegna Agente
+                    ctx.fillStyle = '#ffcc00';
+                    ctx.beginPath();
+                    ctx.arc(agent.pos.x, agent.pos.y, agent.radius, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Disegna il Path corrente
+                    if (agent.path.length > 0) {
+                        ctx.strokeStyle = '#ffcc00';
+                        ctx.lineWidth = 2 / camera.zoom;
+                        ctx.setLineDash([5, 5]);
+                        ctx.beginPath();
+                        ctx.moveTo(agent.pos.x, agent.pos.y);
+                        for (const p of agent.path) ctx.lineTo(p.x, p.y);
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                    }
+                }
+            }
+            );
+
+
+            if (targetPos) {
+                // Disegna Target
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(targetPos.x, targetPos.y, 6 / camera.zoom, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.restore(); // Fine del rendering
+        }
+
+        function drawGraph() {
+            // Draw Edges
+            ctx.strokeStyle = '#ffffff20';
+            ctx.lineWidth = 1 / camera.zoom;
+            ctx.beginPath();
+            for (const edge of visibilityGraph.edges) {
+                ctx.moveTo(edge.from.x, edge.from.y);
+                ctx.lineTo(edge.to.x, edge.to.y);
+            }
+            ctx.stroke();
+
+            // Draw Nodes
+            ctx.fillStyle = '#00ffcc';
+            for (const node of visibilityGraph.nodes) {
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, 3 / camera.zoom, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawPolygon(poly, stroke, fill, width) {
+            if (!poly || poly.length < 2) return;
+            ctx.beginPath();
+            ctx.moveTo(poly[0].x, poly[0].y);
+            for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+            ctx.closePath();
+            if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+            if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = width / camera.zoom; ctx.stroke(); }
+        }
+
+        function drawGrid() {
+            // (Il tuo codice griglia originale va benissimo qui, omesso per brevità)
+            const step = 50;
+            const bounds = {
+                minX: -camera.offsetX / camera.zoom - 100,
+                minY: -camera.offsetY / camera.zoom - 100,
+                maxX: (canvas.width - camera.offsetX) / camera.zoom + 100,
+                maxY: (canvas.height - camera.offsetY) / camera.zoom + 100
+            };
+
+            ctx.strokeStyle = '#ffffff08';
+            ctx.lineWidth = 1 / camera.zoom;
+
+            ctx.beginPath();
+            for (let x = Math.floor(bounds.minX / step) * step; x < bounds.maxX; x += step) {
+                ctx.moveTo(x, bounds.minY);
+                ctx.lineTo(x, bounds.maxY);
+            }
+            for (let y = Math.floor(bounds.minY / step) * step; y < bounds.maxY; y += step) {
+                ctx.moveTo(bounds.minX, y);
+                ctx.lineTo(bounds.maxX, y);
+            }
+            ctx.stroke();
+        }
+
+        function getValidTarget(clickPos) {
+            // 1. Controlliamo click dentro ostacolo originale
+            let clickedHoleIndex = -1;
+            if (mapData.holes) {
+                for (let i = 0; i < mapData.holes.length; i++) {
+                    if (isPointInPolygon(clickPos.x, clickPos.y, mapData.holes[i])) {
+                        clickedHoleIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            // Caso A: Terreno libero
+            if (clickedHoleIndex === -1) {
+                return { pos: clickPos, type: 'move' };
+            }
+
+            // Caso B: Click su ostacolo -> Proiezione con PADDING
+            const expandedPoly = processedGeometry.holes[clickedHoleIndex];
+
+            let bestPoint = null;
+            let minDistSq = Infinity;
+            const SAFETY_PADDING = 2.0; // 2 pixel di sicurezza dal muro espanso
+
+            for (let i = 0; i < expandedPoly.length; i++) {
+                const p1 = expandedPoly[i];
+                const p2 = expandedPoly[(i + 1) % expandedPoly.length];
+
+                // 1. Trova il punto proiettato sul segmento nudo e crudo
+                const proj = getClosestPointOnSegment(clickPos, p1, p2);
+                const distSq = (proj.x - clickPos.x) ** 2 + (proj.y - clickPos.y) ** 2;
+
+                if (distSq < minDistSq) {
+                    minDistSq = distSq;
+
+                    // 2. Calcola la Normale "Uscente" (verso l'area camminabile)
+                    // Assumiamo che i tuoi poligoni siano CCW (senso antiorario).
+                    // Se percorri A->B, l'interno è a sinistra, l'esterno (camminabile) è a DESTRA.
+
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    const len = Math.hypot(dx, dy);
+
+                    // Normale destra (Right Normal): (dy, -dx)
+                    const nx = dy / len;
+                    const ny = -dx / len;
+
+                    // 3. Applica il Nudge (spostamento)
+                    bestPoint = {
+                        x: proj.x + nx * SAFETY_PADDING,
+                        y: proj.y + ny * SAFETY_PADDING
+                    };
+                }
+            }
+
+            // Controllo finale di sicurezza: il punto calcolato è davvero walkable?
+            // Se per qualche caso limite (angolo acuto estremo) siamo ancora dentro, 
+            // falliamo o proviamo ad aumentare il padding.
+            if (bestPoint && !isPointWalkable(bestPoint, processedGeometry)) {
+                console.warn("Target point still not walkable, applying emergency push");
+                // Fallback grezzo: spingi verso il click originale (se era fuori) o verso l'agente
+                // Ma col padding di 2px sopra, al 99% questo non serve.
+            }
+
+            return {
+                pos: bestPoint,
+                type: 'attack',
+                targetId: clickedHoleIndex
+            };
+        }
+        // Mouse/Key handling (Invariati - copia le funzioni dal tuo codice originale)
+        function getWorldPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+        }
+        function screenToWorld(x, y) { return { x: (x - camera.offsetX) / camera.zoom, y: (y - camera.offsetY) / camera.zoom }; }
+        function handleMouseDown(e) {
+            if (e.button === 0 && e.shiftKey) {
+                const w = getWorldPos(e);
+                spawnAgent(w.x, w.y);
+                render();
+                return;
+            }
+            if (e.button === 1 || (e.button === 0 && spacePressed)) { isPanning = true; panStart = { x: e.clientX, y: e.clientY }; canvas.style.cursor = 'grabbing'; }
+        }
+        function handleMouseMove(e) { if (isPanning) { camera.offsetX += e.clientX - panStart.x; camera.offsetY += e.clientY - panStart.y; panStart = { x: e.clientX, y: e.clientY }; render(); } }
+        function handleMouseUp(e) { isPanning = false; canvas.style.cursor = spacePressed ? 'grab' : 'default'; }
+        function handleWheel(e) { if (e.altKey) { e.preventDefault(); const factor = e.deltaY > 0 ? 0.9 : 1.1; camera.zoom *= factor; render(); } }
+        function handleKeyDown(e) { if (e.code === 'Space') { spacePressed = true; canvas.style.cursor = 'grab'; } }
+        function handleKeyUp(e) { if (e.code === 'Space') { spacePressed = false; canvas.style.cursor = 'default'; } }
+
+        function updateStatus(t) { document.getElementById('status-text').textContent = t; }
+        function updateStats(t) { document.getElementById('stats-text').textContent = t; }
+
+        // Funzione helper per il baricentro di un poligono
+        function getPolygonCentroid(pts) {
+            let x = 0, y = 0;
+            for (const p of pts) { x += p.x; y += p.y; }
+            return { x: x / pts.length, y: y / pts.length };
+        }
+
+        function handleRightClick(e) {
+            e.preventDefault();
+            if (agents.length === 0) return;
+
+            const w = getWorldPos(e);
+            const targetInfo = getValidTarget(w);
+
+            updateStatus(`Planning formation for ${agents.length} agents...`);
+
+            let formationPoints = [];
+            const AGENT_SPACING = 30; // Distanza tra unità in formazione
+
+            if (targetInfo.type === 'attack') {
+                // --- ATTACCO: CERCHIO ATTORNO ALL'OSTACOLO ---
+                // 1. Recupera il poligono originale dell'ostacolo
+                const holePoly = mapData.holes[targetInfo.targetId];
+                // 2. Calcola il centro dell'ostacolo
+                const obstacleCenter = getPolygonCentroid(holePoly);
+                // 3. Stima raggio ostacolo (distanza media dal centro ai vertici)
+                let radiusSum = 0;
+                holePoly.forEach(p => radiusSum += Math.hypot(p.x - obstacleCenter.x, p.y - obstacleCenter.y));
+                const avgRadius = radiusSum / holePoly.length;
+
+                // 4. Genera punti di accerchiamento
+                formationPoints = getFormationPositions(
+                    obstacleCenter,
+                    agents.length,
+                    AGENT_SPACING,
+                    'attack',
+                    avgRadius
+                );
+
+            } else {
+                // --- MOVIMENTO: SPIRALE ATTORNO AL CLICK ---
+                formationPoints = getFormationPositions(
+                    targetInfo.pos,
+                    agents.length,
+                    AGENT_SPACING,
+                    'move'
+                );
+            }
+
+            // --- FILTRAGGIO PUNTI NON VALIDI ---
+            // Importante: alcuni punti della formazione potrebbero finire dentro i muri!
+            // Li "spingiamo" verso il punto valido più vicino o li scartiamo.
+            formationPoints = formationPoints.map(p => {
+                if (isPointWalkable(p, processedGeometry)) {
+                    return p;
+                } else {
+                    // Se il punto della formazione è nel muro, prova a proiettarlo fuori
+                    // Usiamo la logica di 'getValidTarget' su quel punto specifico
+                    const fix = getValidTarget(p);
+                    return fix.pos; // Ritorna il punto proiettato sul bordo
+                }
+            });
+
+            // --- ASSEGNAZIONE E CALCOLO PERCORSI ---
+            const assignments = assignTargetsIdeally(agents, formationPoints);
+            //console.log(assignments);
+
+            assignments.forEach(assignment => {
+                // Calcola il percorso individuale verso il PROPRIO slot nella formazione
+                calculatePathForAgent(assignment.agent, assignment.target);
+            });
+
+            render();
+        }
+
+        // Nota: Devi rifattorizzare calculatePath per accettare (agent, target) come argomenti
+        // ============================================
+        // Pathfinding (A* with Dynamic Connection)
+        // ============================================
+
+        function calculatePathForAgent(agent, targetPos) {
+            //console.log("calculating path for", agent, targetPos);
+            if (!agent.pos || !targetPos || !visibilityGraph.nodes.length) return;
+
+            // 1. Connetti Start e End al Grafo
+            // Non modifichiamo il grafo originale, creiamo nodi temporanei
+            const startNode = { id: 'start', x: agent.pos.x, y: agent.pos.y, neighbors: [] };
+            const endNode = { id: 'end', x: targetPos.x, y: targetPos.y, neighbors: [] };
+
+            // Tenta di connettere Start e End a tutti i nodi visibili del grafo
+            // E anche direttamente tra loro (se visibili)
+            const allNodes = [...visibilityGraph.nodes];
+            const blockingSegments = getBlockingSegments(); // Helper definito sotto
+
+            // Connessione Start -> Grafo
+            for (const node of allNodes) {
+                const dist = Math.hypot(node.x - startNode.x, node.y - startNode.y);
+                if (checkVisibility(startNode, node, blockingSegments, processedGeometry)) {
+                    startNode.neighbors.push({ node: node, cost: dist });
+                    // Nota: il grafo è indiretto, ma per A* ci basta sapere "dove posso andare da qui"
+                }
+            }
+
+            // Connessione Grafo -> End (Aggiungiamo 'end' come vicino ai nodi esistenti temporaneamente)
+            // Per non sporcare il grafo, lo gestiremo nella logica dei vicini di A*
+            // O più semplicemente: cerchiamo i nodi da cui 'end' è visibile
+            const nodesCanSeeEnd = [];
+            for (const node of allNodes) {
+                const dist = Math.hypot(node.x - endNode.x, node.y - endNode.y);
+                if (checkVisibility(node, endNode, blockingSegments, processedGeometry)) {
+                    nodesCanSeeEnd.push({ source: node, cost: dist });
+                }
+            }
+
+            // Connessione diretta Start -> End
+            const distDirect = Math.hypot(endNode.x - startNode.x, endNode.y - startNode.y);
+            if (checkVisibility(startNode, endNode, blockingSegments, processedGeometry)) {
+                startNode.neighbors.push({ node: endNode, cost: distDirect });
+            }
+
+            // 2. Esegui A*
+            const path = aStar(startNode, endNode, nodesCanSeeEnd);
+
+            if (path.length > 0) {
+                agent.path = path;
+                updateStatus("Path found!");
+            } else {
+                updateStatus("No path found!");
+                agent.path = [];
+            }
+        }
+
+        function aStar(start, end, nodesCanSeeEnd) {
+            const openSet = [start];
+            const cameFrom = new Map();
+
+            const gScore = new Map(); // Costo dal via
+            gScore.set(start, 0);
+
+            const fScore = new Map(); // Costo stimato totale
+            fScore.set(start, Math.hypot(end.x - start.x, end.y - start.y));
+
+            while (openSet.length > 0) {
+                // Trova nodo con fScore minore
+                openSet.sort((a, b) => (fScore.get(a) || Infinity) - (fScore.get(b) || Infinity));
+                const current = openSet.shift();
+
+                // Arrivato?
+                if (current === end) {
+                    return reconstructPath(cameFrom, current);
+                }
+
+                // Recupera vicini
+                // I vicini sono: quelli nel grafo statico + eventualmente 'end'
+                let neighbors = current.neighbors ? [...current.neighbors] : [];
+
+                // Se siamo su un nodo del grafo che vede la fine, aggiungi la fine come vicino virtuale
+                const toEnd = nodesCanSeeEnd.find(n => n.source === current);
+                if (toEnd) {
+                    neighbors.push({ node: end, cost: toEnd.cost });
+                }
+
+                for (const neighbor of neighbors) {
+                    const tentativeG = gScore.get(current) + neighbor.cost;
+                    const neighborNode = neighbor.node;
+
+                    if (tentativeG < (gScore.get(neighborNode) || Infinity)) {
+                        cameFrom.set(neighborNode, current);
+                        gScore.set(neighborNode, tentativeG);
+                        fScore.set(neighborNode, tentativeG + Math.hypot(end.x - neighborNode.x, end.y - neighborNode.y));
+
+                        if (!openSet.includes(neighborNode)) {
+                            openSet.push(neighborNode);
+                        }
+                    }
+                }
+            }
+            return []; // Fail
+        }
+
+        function reconstructPath(cameFrom, current) {
+            const totalPath = [current];
+            while (cameFrom.has(current)) {
+                current = cameFrom.get(current);
+                totalPath.unshift(current);
+            }
+            // Rimuoviamo il primo punto (posizione attuale agente) per evitare glitch
+            if (totalPath.length > 0) totalPath.shift();
+            return totalPath;
+        }
+
+        // Helper per recuperare i segmenti che bloccano (già usato nel generatore, ma lo estraiamo)
+        function getBlockingSegments() {
+            const segs = [];
+            const add = (poly) => {
+                for (let i = 0; i < poly.length; i++) segs.push({ p1: poly[i], p2: poly[(i + 1) % poly.length] });
+            };
+            if (processedGeometry.outer) add(processedGeometry.outer);
+            if (processedGeometry.holes) processedGeometry.holes.forEach(add);
+            return segs;
+        }
+        function gameLoop(timestamp) {
+            const dt = (timestamp - lastTime) / 1000; // Delta time in secondi
+            lastTime = timestamp;
+
+            //if (agent.pos && agent.path.length > 0) {
+            updateAgents();
+            //}
+
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updateAgent() {
+            // 1. Identifica il target attuale (il prossimo punto nel path)
+            const nextPoint = agent.path[0];
+
+            // Distanza dal prossimo punto
+            const dist = Math.hypot(nextPoint.x - agent.pos.x, nextPoint.y - agent.pos.y);
+
+            // Se siamo vicini al punto intermedio, passiamo al successivo
+            const waypointThreshold = 5; // Pixel di tolleranza
+            if (dist < waypointThreshold) {
+                agent.path.shift(); // Rimuovi il punto raggiunto
+                if (agent.path.length === 0) {
+                    agent.vel = { x: 0, y: 0 }; // Fermati alla fine
+                    return;
+                }
+            }
+
+            // 2. Calcola Steering Force (Seek / Arrive)
+            // Desired Velocity
+            let desired = {
+                x: nextPoint.x - agent.pos.x,
+                y: nextPoint.y - agent.pos.y
+            };
+
+            // Normalizza
+            const dMag = Math.hypot(desired.x, desired.y);
+            if (dMag > 0) {
+                desired.x /= dMag;
+                desired.y /= dMag;
+            }
+
+            // Arrive behaviour: rallenta se è l'ultimo punto e siamo vicini
+            let speed = agent.maxSpeed;
+            if (agent.path.length === 1 && dMag < 100) {
+                speed = (dMag / 100) * agent.maxSpeed;
+            }
+
+            desired.x *= speed;
+            desired.y *= speed;
+
+            // Steering = Desired - Velocity
+            const steer = {
+                x: desired.x - agent.vel.x,
+                y: desired.y - agent.vel.y
+            };
+
+            // Limit Force (rende il movimento fluido e non a scatti)
+            const steerMag = Math.hypot(steer.x, steer.y);
+            if (steerMag > agent.maxForce) {
+                steer.x = (steer.x / steerMag) * agent.maxForce;
+                steer.y = (steer.y / steerMag) * agent.maxForce;
+            }
+
+            // 3. Applica Fisica
+            agent.vel.x += steer.x;
+            agent.vel.y += steer.y;
+
+            agent.pos.x += agent.vel.x;
+            agent.pos.y += agent.vel.y;
+        }
+
+        function getClosestPointOnSegment(p, a, b) {
+            const atob = { x: b.x - a.x, y: b.y - a.y };
+            const atop = { x: p.x - a.x, y: p.y - a.y };
+            const lenSq = atob.x * atob.x + atob.y * atob.y;
+
+            let dot = atop.x * atob.x + atop.y * atob.y;
+
+            // Normalizza la proiezione tra 0 e 1
+            let t = Math.min(1, Math.max(0, dot / lenSq));
+
+            return {
+                x: a.x + atob.x * t,
+                y: a.y + atob.y * t
+            };
+        }
+
+        function computeSeparation(agent) {
+            const desiredSeparation = agent.radius * 2.5; // Distanza desiderata (diametro + margine)
+            let sum = { x: 0, y: 0 };
+            let count = 0;
+
+            for (const other of agents) {
+                if (other === agent) continue;
+
+                const d = Math.hypot(agent.pos.x - other.pos.x, agent.pos.y - other.pos.y);
+
+                // Se l'altro è troppo vicino
+                if (d > 0 && d < desiredSeparation) {
+                    // Vettore che punta via dal vicino
+                    let diff = { x: agent.pos.x - other.pos.x, y: agent.pos.y - other.pos.y };
+
+                    // Pesa per la distanza: più sono vicino, più scappo forte
+                    diff.x /= d;
+                    diff.y /= d;
+
+                    sum.x += diff.x;
+                    sum.y += diff.y;
+                    count++;
+                }
+            }
+
+            if (count > 0) {
+                // Media
+                sum.x /= count;
+                sum.y /= count;
+
+                // Normalizza alla massima velocità
+                const mag = Math.hypot(sum.x, sum.y);
+                if (mag > 0) {
+                    sum.x = (sum.x / mag) * agent.maxSpeed;
+                    sum.y = (sum.y / mag) * agent.maxSpeed;
+                }
+
+                // Reynolds Steering: Steering = Desired - Velocity
+                sum.x -= agent.vel.x;
+                sum.y -= agent.vel.y;
+            }
+
+            return sum;
+        }
+
+        // Calcola la forza di repulsione dai muri (wall avoidance)
+        function computeWallAvoidance(agent) {
+            const lookAhead = agent.radius * 3; // Distanza di rilevamento
+            let force = { x: 0, y: 0 };
+
+            // Controlla tutti i segmenti degli ostacoli espansi
+            const segments = getBlockingSegments();
+
+            for (const seg of segments) {
+                // Trova il punto più vicino sul segmento
+                const closest = getClosestPointOnSegment(agent.pos, seg.p1, seg.p2);
+                const dist = Math.hypot(closest.x - agent.pos.x, closest.y - agent.pos.y);
+
+                if (dist < lookAhead && dist > 0.1) {
+                    // Vettore che punta via dal muro
+                    let away = {
+                        x: agent.pos.x - closest.x,
+                        y: agent.pos.y - closest.y
+                    };
+
+                    // Normalizza e scala inversamente alla distanza
+                    const mag = Math.hypot(away.x, away.y);
+                    const strength = (lookAhead - dist) / lookAhead; // 0 a 1
+
+                    force.x += (away.x / mag) * strength * agent.maxSpeed;
+                    force.y += (away.y / mag) * strength * agent.maxSpeed;
+                }
+            }
+
+            return force;
+        }
+
+        // Proietta un punto fuori dagli ostacoli se è dentro
+        function pushOutOfWalls(pos) {
+            // Se già walkable, non fare nulla
+            if (isPointWalkable(pos, processedGeometry)) {
+                return pos;
+            }
+
+            // Trova il punto più vicino sul bordo di un ostacolo e spostati fuori
+            let bestPoint = null;
+            let minDist = Infinity;
+
+            // Controlla tutti gli holes espansi
+            for (const hole of processedGeometry.holes) {
+                for (let i = 0; i < hole.length; i++) {
+                    const p1 = hole[i];
+                    const p2 = hole[(i + 1) % hole.length];
+
+                    const closest = getClosestPointOnSegment(pos, p1, p2);
+                    const dist = Math.hypot(closest.x - pos.x, closest.y - pos.y);
+
+                    if (dist < minDist) {
+                        minDist = dist;
+
+                        // Calcola normale uscente (verso area walkable)
+                        const dx = p2.x - p1.x;
+                        const dy = p2.y - p1.y;
+                        const len = Math.hypot(dx, dy);
+
+                        // Normale destra per poligoni CCW (verso esterno)
+                        const nx = dy / len;
+                        const ny = -dx / len;
+
+                        // Sposta di un po' oltre il bordo
+                        bestPoint = {
+                            x: closest.x + nx * 5,
+                            y: closest.y + ny * 5
+                        };
+                    }
+                }
+            }
+
+            // Verifica che il punto trovato sia effettivamente walkable
+            if (bestPoint && isPointWalkable(bestPoint, processedGeometry)) {
+                return bestPoint;
+            }
+
+            // Fallback: ritorna la posizione originale
+            return pos;
+        }
+
+        function updateAgents() {
+            agents.forEach(agent => {
+                if (agent.path.length === 0) {
+                    // Se arrivato, frena ma mantieni separazione (per non collassare)
+                    agent.vel.x *= 0.9;
+                    agent.vel.y *= 0.9;
+
+                    // Applica wall avoidance anche da fermi
+                    const wallForce = computeWallAvoidance(agent);
+                    agent.vel.x += wallForce.x * 0.1;
+                    agent.vel.y += wallForce.y * 0.1;
+
+                    // Applica velocità
+                    agent.pos.x += agent.vel.x;
+                    agent.pos.y += agent.vel.y;
+
+                    // Safety push out
+                    const safePos = pushOutOfWalls(agent.pos);
+                    agent.pos.x = safePos.x;
+                    agent.pos.y = safePos.y;
+                    return;
+                }
+
+                // 1. Path Following Force
+                const nextPoint = agent.path[0];
+                const distToWaypoint = Math.hypot(nextPoint.x - agent.pos.x, nextPoint.y - agent.pos.y);
+
+                if (distToWaypoint < 10) { // Waypoint raggiunto
+                    agent.path.shift();
+                    if (agent.path.length === 0) return;
+                }
+
+                let desired = { x: nextPoint.x - agent.pos.x, y: nextPoint.y - agent.pos.y };
+                const dMag = Math.hypot(desired.x, desired.y);
+                desired.x = (desired.x / dMag) * agent.maxSpeed;
+                desired.y = (desired.y / dMag) * agent.maxSpeed;
+
+                let steerPath = { x: desired.x - agent.vel.x, y: desired.y - agent.vel.y };
+
+                // 2. Separation Force
+                let steerSep = computeSeparation(agent);
+
+                // 3. Wall Avoidance Force (previene collisioni)
+                let steerWall = computeWallAvoidance(agent);
+
+                // 4. Somma Ponderata
+                // Path: 1.0, Separazione: 1.5, Wall Avoidance: 2.0 (priorità alta per evitare muri)
+                let acc = {
+                    x: steerPath.x * 1.0 + steerSep.x * 1.5 + steerWall.x * 2.0,
+                    y: steerPath.y * 1.0 + steerSep.y * 1.5 + steerWall.y * 2.0
+                };
+
+                // Limit Force
+                const accMag = Math.hypot(acc.x, acc.y);
+                if (accMag > agent.maxForce) {
+                    acc.x = (acc.x / accMag) * agent.maxForce;
+                    acc.y = (acc.y / accMag) * agent.maxForce;
+                }
+
+                // Fisica
+                agent.vel.x += acc.x;
+                agent.vel.y += acc.y;
+
+                // Limita velocità massima
+                const velMag = Math.hypot(agent.vel.x, agent.vel.y);
+                if (velMag > agent.maxSpeed) {
+                    agent.vel.x = (agent.vel.x / velMag) * agent.maxSpeed;
+                    agent.vel.y = (agent.vel.y / velMag) * agent.maxSpeed;
+                }
+
+                // Salva posizione precedente
+                const prevPos = { x: agent.pos.x, y: agent.pos.y };
+
+                // Applica movimento
+                agent.pos.x += agent.vel.x;
+                agent.pos.y += agent.vel.y;
+
+                // 5. Collision Response: se finito in un muro, sliding o push out
+                if (!isPointWalkable(agent.pos, processedGeometry)) {
+                    // Prova sliding: muovi solo su un asse alla volta
+                    const testX = { x: prevPos.x + agent.vel.x, y: prevPos.y };
+                    const testY = { x: prevPos.x, y: prevPos.y + agent.vel.y };
+
+                    if (isPointWalkable(testX, processedGeometry)) {
+                        // Sliding orizzontale OK
+                        agent.pos.x = testX.x;
+                        agent.pos.y = testX.y;
+                        agent.vel.y *= 0.5; // Riduci componente bloccata
+                    } else if (isPointWalkable(testY, processedGeometry)) {
+                        // Sliding verticale OK
+                        agent.pos.x = testY.x;
+                        agent.pos.y = testY.y;
+                        agent.vel.x *= 0.5; // Riduci componente bloccata
+                    } else {
+                        // Nessun sliding possibile, push out
+                        const safePos = pushOutOfWalls(agent.pos);
+                        agent.pos.x = safePos.x;
+                        agent.pos.y = safePos.y;
+                        // Riduci velocità invece di azzerarla
+                        agent.vel.x *= 0.3;
+                        agent.vel.y *= 0.3;
+                    }
+                }
+            });
+        }
+
+        function getFormationPositions(center, count, spacing, type, obstacleRadius = 0) {
+            const positions = [];
+
+            if (type === 'move') {
+                // --- FORMAZIONE A SPIRALE (Standard RTS) ---
+                // Il primo sta al centro, gli altri a cerchi concentrici attorno
+                positions.push({ x: center.x, y: center.y }); // Il leader va al click
+
+                let ring = 1;
+                let countInRing = 6; // I cerchi crescono di 6 unità circa
+                let created = 1;
+
+                while (created < count) {
+                    const radius = ring * spacing;
+                    const angleStep = (Math.PI * 2) / countInRing;
+
+                    for (let i = 0; i < countInRing && created < count; i++) {
+                        const angle = i * angleStep;
+                        positions.push({
+                            x: center.x + Math.cos(angle) * radius,
+                            y: center.y + Math.sin(angle) * radius
+                        });
+                        created++;
+                    }
+                    ring++;
+                    countInRing += 6;
+                }
+
+            } else if (type === 'attack') {
+                // --- FORMAZIONE AD ACCERCHIAMENTO ---
+                // Distribuisce i punti su un arco o cerchio attorno all'ostacolo
+                // Distanza = RaggioOstacolo + RaggioAttacco + Margine
+                const attackDistance = obstacleRadius + 80; // Esempio: 80px di range
+
+                // Distribuiamo equamente su 360 gradi (o meno se siamo contro un muro)
+                const angleStep = (Math.PI * 2) / count;
+
+                for (let i = 0; i < count; i++) {
+                    const angle = i * angleStep;
+                    positions.push({
+                        x: center.x + Math.cos(angle) * attackDistance,
+                        y: center.y + Math.sin(angle) * attackDistance
+                    });
+                }
+            }
+
+            return positions;
+        }
+
+        function assignTargetsIdeally(agents, targets) {
+            // Copia superficiale per non modificare gli array originali durante il calcolo
+            let availableAgents = [...agents];
+            let availableTargets = [...targets];
+            let assignments = [];
+
+            // Algoritmo semplice: 
+            // Per ogni target, trova l'agente più vicino non ancora assegnato.
+            // (Nota: L'algoritmo Ungherese sarebbe perfetto ma è troppo complesso per ora)
+
+            while (availableTargets.length > 0 && availableAgents.length > 0) {
+                let bestDist = Infinity;
+                let bestAgentIdx = -1;
+                let bestTargetIdx = 0; // Prendiamo il primo target e cerchiamo chi lo vuole
+
+                const target = availableTargets[0];
+
+                for (let i = 0; i < availableAgents.length; i++) {
+                    const a = availableAgents[i];
+                    const d = (a.pos.x - target.x) ** 2 + (a.pos.y - target.y) ** 2;
+                    if (d < bestDist) {
+                        bestDist = d;
+                        bestAgentIdx = i;
+                    }
+                }
+
+                // Assegna
+                assignments.push({
+                    agent: availableAgents[bestAgentIdx],
+                    target: target
+                });
+
+                // Rimuovi dai pool
+                availableAgents.splice(bestAgentIdx, 1);
+                availableTargets.splice(0, 1);
+            }
+
+            return assignments;
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

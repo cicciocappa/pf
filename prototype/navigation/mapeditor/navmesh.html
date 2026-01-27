@@ -1,0 +1,1774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavMesh Generator - Recast-like</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toolbar {
+            background: #16213e;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            border-bottom: 1px solid #0f3460;
+            flex-wrap: wrap;
+        }
+
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toolbar-group label {
+            font-size: 13px;
+            color: #aaa;
+        }
+
+        .toolbar-group input[type="number"] {
+            width: 60px;
+            padding: 6px 8px;
+            background: #0a0a1a;
+            border: 1px solid #0f3460;
+            color: #eee;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .btn {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #1a4a7a;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: #1a4a7a;
+        }
+
+        .btn.active {
+            background: #e94560;
+            border-color: #e94560;
+        }
+
+        .btn.generate {
+            background: #0a8a50;
+            border-color: #0a8a50;
+        }
+
+        .btn.generate:hover {
+            background: #0ca060;
+        }
+
+        .separator {
+            width: 1px;
+            height: 30px;
+            background: #0f3460;
+            margin: 0 8px;
+        }
+
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .info-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 12px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.6;
+            max-width: 280px;
+        }
+
+        .info-panel strong {
+            color: #e94560;
+        }
+
+        .info-panel .section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #0f3460;
+        }
+
+        .status-bar {
+            background: #0f0f1a;
+            padding: 8px 20px;
+            font-size: 12px;
+            color: #888;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-label {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #1a4a7a;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .file-label:hover {
+            background: #1a4a7a;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .checkbox-group input {
+            width: 14px;
+            height: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="toolbar-group">
+            <input type="file" id="file-input" accept=".json">
+            <label for="file-input" class="file-label">Load JSON</label>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <label>Agent Radius:</label>
+            <input type="number" id="agent-radius" value="12" min="0" max="50">
+        </div>
+
+        <div class="toolbar-group">
+            <label>Simplify:</label>
+            <input type="number" id="simplify-threshold" value="1" min="0" max="20" step="0.5">
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button class="btn generate" id="btn-generate">Generate NavMesh</button>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <label>View:</label>
+            <div class="checkbox-group">
+                <input type="checkbox" id="show-contours">
+                <label for="show-contours">Offset Contours</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="show-navmesh" checked>
+                <label for="show-navmesh">NavMesh</label>
+            </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="toolbar-group">
+            <button class="btn" id="btn-export">Export NavMesh</button>
+        </div>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="canvas"></canvas>
+        <div class="info-panel">
+            <div><strong>Recast-like NavMesh Generator</strong></div>
+            <div class="section">
+                <strong>Controls:</strong><br>
+                Alt + Wheel: Zoom<br>
+                Middle Mouse / Space + Drag: Pan
+            </div>
+            <div class="section">
+                <strong>Pipeline:</strong><br>
+                1. Load geometry (outer + holes)<br>
+                2. Offset by agent radius<br>
+                3. Simplify contours<br>
+                4. Triangulate with holes<br>
+                5. Merge into convex polygons
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <span id="status-text">Load a JSON file to begin</span>
+        <span id="stats-text"></span>
+    </div>
+
+    <script>
+        // ============================================
+        // Recast-like NavMesh Generator
+        // ============================================
+
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // State
+        let mapData = null;
+        let rasterData = null;
+        let navmesh = null;
+
+        // Camera
+        const camera = {
+            offsetX: 50,
+            offsetY: 50,
+            zoom: 1.0
+        };
+
+        let isPanning = false;
+        let panStart = { x: 0, y: 0 };
+        let spacePressed = false;
+
+        // ============================================
+        // Initialization
+        // ============================================
+
+        function init() {
+            resize();
+            bindEvents();
+            render();
+        }
+
+        function resize() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            render();
+        }
+
+        function bindEvents() {
+            window.addEventListener('resize', resize);
+
+            document.getElementById('file-input').addEventListener('change', handleFileLoad);
+            document.getElementById('btn-generate').addEventListener('click', generateNavMesh);
+            document.getElementById('btn-export').addEventListener('click', exportNavMesh);
+
+            // View toggles
+            ['show-contours', 'show-navmesh'].forEach(id => {
+                document.getElementById(id).addEventListener('change', render);
+            });
+
+            // Canvas events
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('wheel', handleWheel, { passive: false });
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+            window.addEventListener('keydown', handleKeyDown);
+            window.addEventListener('keyup', handleKeyUp);
+        }
+
+        // ============================================
+        // File Loading
+        // ============================================
+
+        function handleFileLoad(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    mapData = JSON.parse(event.target.result);
+                    rasterData = null;
+                    navmesh = null;
+                    fitToView();
+                    updateStatus(`Loaded: ${file.name}`);
+                    render();
+                } catch (err) {
+                    alert('Error parsing JSON: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function fitToView() {
+            if (!mapData || !mapData.outer || mapData.outer.length === 0) return;
+
+            const bounds = getBounds(mapData.outer);
+            const padding = 80;
+
+            const scaleX = (canvas.width - padding * 2) / (bounds.maxX - bounds.minX);
+            const scaleY = (canvas.height - padding * 2) / (bounds.maxY - bounds.minY);
+            camera.zoom = Math.min(scaleX, scaleY, 2);
+
+            camera.offsetX = padding - bounds.minX * camera.zoom;
+            camera.offsetY = padding - bounds.minY * camera.zoom;
+        }
+
+        function getBounds(polygon) {
+            let minX = Infinity, minY = Infinity;
+            let maxX = -Infinity, maxY = -Infinity;
+
+            for (const p of polygon) {
+                minX = Math.min(minX, p.x);
+                minY = Math.min(minY, p.y);
+                maxX = Math.max(maxX, p.x);
+                maxY = Math.max(maxY, p.y);
+            }
+
+            return { minX, minY, maxX, maxY };
+        }
+
+        // ============================================
+        // Mouse Handlers
+        // ============================================
+
+        function screenToWorld(screenX, screenY) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: (screenX - rect.left - camera.offsetX) / camera.zoom,
+                y: (screenY - rect.top - camera.offsetY) / camera.zoom
+            };
+        }
+
+        function handleMouseDown(e) {
+            if (e.button === 1 || (e.button === 0 && spacePressed)) {
+                isPanning = true;
+                panStart = { x: e.clientX, y: e.clientY };
+                canvas.style.cursor = 'grabbing';
+                e.preventDefault();
+            }
+        }
+
+        function handleMouseMove(e) {
+            if (isPanning) {
+                camera.offsetX += e.clientX - panStart.x;
+                camera.offsetY += e.clientY - panStart.y;
+                panStart = { x: e.clientX, y: e.clientY };
+                render();
+            }
+        }
+
+        function handleMouseUp(e) {
+            if (isPanning) {
+                isPanning = false;
+                canvas.style.cursor = spacePressed ? 'grab' : 'default';
+            }
+        }
+
+        function handleWheel(e) {
+            if (e.altKey) {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                const worldBefore = {
+                    x: (mouseX - camera.offsetX) / camera.zoom,
+                    y: (mouseY - camera.offsetY) / camera.zoom
+                };
+
+                const factor = e.deltaY > 0 ? 0.9 : 1.1;
+                camera.zoom = Math.max(0.1, Math.min(10, camera.zoom * factor));
+
+                const worldAfter = {
+                    x: (mouseX - camera.offsetX) / camera.zoom,
+                    y: (mouseY - camera.offsetY) / camera.zoom
+                };
+
+                camera.offsetX += (worldAfter.x - worldBefore.x) * camera.zoom;
+                camera.offsetY += (worldAfter.y - worldBefore.y) * camera.zoom;
+
+                render();
+            }
+        }
+
+        function handleKeyDown(e) {
+            if (e.code === 'Space' && !spacePressed) {
+                spacePressed = true;
+                canvas.style.cursor = 'grab';
+                e.preventDefault();
+            }
+        }
+
+        function handleKeyUp(e) {
+            if (e.code === 'Space') {
+                spacePressed = false;
+                canvas.style.cursor = 'default';
+            }
+        }
+
+        // ============================================
+        // NavMesh Generation - Approccio semplificato
+        // Usa direttamente la geometria dal JSON con offset
+        // ============================================
+
+        function generateNavMesh() {
+            if (!mapData) {
+                alert('Please load a JSON file first');
+                return;
+            }
+
+            const startTime = performance.now();
+            updateStatus('Generating NavMesh...');
+
+            const agentRadius = parseInt(document.getElementById('agent-radius').value);
+            const simplifyThreshold = parseFloat(document.getElementById('simplify-threshold').value);
+
+            try {
+                // Step 1: Prendi la geometria originale
+                updateStatus('Step 1/4: Processing geometry...');
+                let outer = mapData.outer.map(p => ({ x: p.x, y: p.y }));
+                let holes = (mapData.holes || []).map(h => h.map(p => ({ x: p.x, y: p.y })));
+
+                console.log(`Original: outer=${outer.length} vertices, ${holes.length} holes`);
+
+                // Step 2: Applica offset per agent radius
+                updateStatus('Step 2/4: Applying agent radius offset...');
+                if (agentRadius > 0) {
+                    outer = shrinkPolygon(outer, agentRadius);
+                    holes = holes.map(h => expandPolygon(h, agentRadius)).filter(h => h.length >= 3);
+                }
+
+                console.log(`After offset: outer=${outer.length} vertices, ${holes.length} holes`);
+
+                // Step 3: Semplifica i contorni
+                updateStatus('Step 3/4: Simplifying contours...');
+                if (simplifyThreshold > 0) {
+                    outer = simplifyContour(outer, simplifyThreshold);
+                    holes = holes.map(h => simplifyContour(h, simplifyThreshold)).filter(h => h.length >= 3);
+                }
+
+                // Step 4: Triangola e crea mesh
+                updateStatus('Step 4/4: Building mesh...');
+
+                // Assicura winding corretto
+                outer = ensureCCW(outer);
+                holes = holes.map(h => ensureCW(h));
+
+                // Triangola con holes
+                const triangles = triangulateWithHoles(outer, holes);
+                console.log(`Triangulation: ${triangles.length} triangles`);
+
+                // Merge in poligoni convessi
+                navmesh = mergeTrianglesToConvex(triangles);
+                console.log(`Merge: ${navmesh.length} convex polygons`);
+
+                // Store for visualization
+                rasterData = {
+                    contours: [
+                        { contour: outer, isHole: false, area: signedArea(outer) },
+                        ...holes.map(h => ({ contour: h, isHole: true, area: signedArea(h) }))
+                    ]
+                };
+
+                const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+                updateStatus(`NavMesh generated in ${elapsed}s`);
+                updateStats(`Polygons: ${navmesh.length} | Holes: ${holes.length}`);
+
+                render();
+            } catch (err) {
+                console.error(err);
+                alert('Error generating navmesh: ' + err.message);
+                updateStatus('Error: ' + err.message);
+            }
+        }
+
+        // Shrink polygon inward by distance (per outer boundary)
+        function shrinkPolygon(polygon, distance) {
+            return offsetPolygon(polygon, -distance);
+        }
+
+        // Expand polygon outward by distance (per holes)
+        function expandPolygon(polygon, distance) {
+            return offsetPolygon(polygon, distance);
+        }
+
+        // Offset polygon by distance (positive = outward, negative = inward)
+        function offsetPolygon(polygon, distance) {
+            if (polygon.length < 3) return polygon;
+
+            const result = [];
+
+            for (let i = 0; i < polygon.length; i++) {
+                const prev = polygon[(i - 1 + polygon.length) % polygon.length];
+                const curr = polygon[i];
+                const next = polygon[(i + 1) % polygon.length];
+
+                // Calcola le normali dei due edge adiacenti
+                const edge1 = { x: curr.x - prev.x, y: curr.y - prev.y };
+                const edge2 = { x: next.x - curr.x, y: next.y - curr.y };
+
+                const len1 = Math.sqrt(edge1.x * edge1.x + edge1.y * edge1.y);
+                const len2 = Math.sqrt(edge2.x * edge2.x + edge2.y * edge2.y);
+
+                if (len1 < 0.001 || len2 < 0.001) {
+                    result.push({ ...curr });
+                    continue;
+                }
+
+                // Normali (perpendicolari, verso sinistra = interno per CCW)
+                const n1 = { x: -edge1.y / len1, y: edge1.x / len1 };
+                const n2 = { x: -edge2.y / len2, y: edge2.x / len2 };
+
+                // Media delle normali per il miter
+                const nx = n1.x + n2.x;
+                const ny = n1.y + n2.y;
+                const nlen = Math.sqrt(nx * nx + ny * ny);
+
+                if (nlen < 0.001) {
+                    result.push({ ...curr });
+                    continue;
+                }
+
+                // Calcola il fattore di scala per mantenere la distanza corretta
+                const dot = n1.x * (nx / nlen) + n1.y * (ny / nlen);
+                const scale = dot > 0.1 ? 1 / dot : 1;
+                const limitedScale = Math.min(scale, 3); // Limita per angoli acuti
+
+                result.push({
+                    x: curr.x + (nx / nlen) * distance * limitedScale,
+                    y: curr.y + (ny / nlen) * distance * limitedScale
+                });
+            }
+
+            return result;
+        }
+
+        // ============================================
+        // Step 1: Rasterization
+        // ============================================
+
+        function rasterize(mapData, cellSize) {
+            const bounds = getBounds(mapData.outer);
+            const padding = cellSize * 2;
+
+            bounds.minX -= padding;
+            bounds.minY -= padding;
+            bounds.maxX += padding;
+            bounds.maxY += padding;
+
+            const cols = Math.ceil((bounds.maxX - bounds.minX) / cellSize);
+            const rows = Math.ceil((bounds.maxY - bounds.minY) / cellSize);
+
+            // Create grid: 0 = blocked, 1 = walkable
+            const cells = new Uint8Array(cols * rows);
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const worldX = bounds.minX + (x + 0.5) * cellSize;
+                    const worldY = bounds.minY + (y + 0.5) * cellSize;
+
+                    // Check if inside outer polygon
+                    if (!isPointInPolygon(worldX, worldY, mapData.outer)) {
+                        cells[y * cols + x] = 0;
+                        continue;
+                    }
+
+                    // Check if inside any hole
+                    let inHole = false;
+                    for (const hole of (mapData.holes || [])) {
+                        if (isPointInPolygon(worldX, worldY, hole)) {
+                            inHole = true;
+                            break;
+                        }
+                    }
+
+                    cells[y * cols + x] = inHole ? 0 : 1;
+                }
+            }
+
+            return { cells, cols, rows, bounds, cellSize };
+        }
+
+        function isPointInPolygon(x, y, polygon) {
+            let inside = false;
+            for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+                const xi = polygon[i].x, yi = polygon[i].y;
+                const xj = polygon[j].x, yj = polygon[j].y;
+
+                if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        // ============================================
+        // Step 2: Distance Field
+        // ============================================
+
+        function buildDistanceField(grid) {
+            const { cells, cols, rows } = grid;
+            grid.distance = new Uint16Array(cols * rows);
+
+            // Initialize: 0 for blocked, max for walkable
+            for (let i = 0; i < cells.length; i++) {
+                grid.distance[i] = cells[i] === 0 ? 0 : 65535;
+            }
+
+            // Forward pass
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const idx = y * cols + x;
+                    if (grid.distance[idx] === 0) continue;
+
+                    let minDist = grid.distance[idx];
+
+                    // Check neighbors (4-connected for forward pass)
+                    if (x > 0) minDist = Math.min(minDist, grid.distance[idx - 1] + 10);
+                    if (y > 0) minDist = Math.min(minDist, grid.distance[idx - cols] + 10);
+                    if (x > 0 && y > 0) minDist = Math.min(minDist, grid.distance[idx - cols - 1] + 14);
+                    if (x < cols - 1 && y > 0) minDist = Math.min(minDist, grid.distance[idx - cols + 1] + 14);
+
+                    grid.distance[idx] = minDist;
+                }
+            }
+
+            // Backward pass
+            for (let y = rows - 1; y >= 0; y--) {
+                for (let x = cols - 1; x >= 0; x--) {
+                    const idx = y * cols + x;
+                    if (grid.distance[idx] === 0) continue;
+
+                    let minDist = grid.distance[idx];
+
+                    if (x < cols - 1) minDist = Math.min(minDist, grid.distance[idx + 1] + 10);
+                    if (y < rows - 1) minDist = Math.min(minDist, grid.distance[idx + cols] + 10);
+                    if (x < cols - 1 && y < rows - 1) minDist = Math.min(minDist, grid.distance[idx + cols + 1] + 14);
+                    if (x > 0 && y < rows - 1) minDist = Math.min(minDist, grid.distance[idx + cols - 1] + 14);
+
+                    grid.distance[idx] = minDist;
+                }
+            }
+        }
+
+        // ============================================
+        // Step 3: Erosion
+        // ============================================
+
+        function erodeGrid(grid, erosionRadius) {
+            const { cells, cols, rows, distance, bounds, cellSize } = grid;
+            const erodedCells = new Uint8Array(cols * rows);
+            const threshold = erosionRadius * 10; // Distance field uses 10 as unit
+
+            for (let i = 0; i < cells.length; i++) {
+                erodedCells[i] = (distance[i] > threshold) ? 1 : 0;
+            }
+
+            return { cells: erodedCells, cols, rows, bounds, cellSize, distance };
+        }
+
+        // ============================================
+        // Step 4: Region Identification
+        // ============================================
+
+        function identifyRegions(grid) {
+            const { cells, cols, rows } = grid;
+            const regionIds = new Uint16Array(cols * rows);
+            let regionCount = 0;
+
+            // Flood fill to identify connected regions
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const idx = y * cols + x;
+                    if (cells[idx] === 1 && regionIds[idx] === 0) {
+                        regionCount++;
+                        floodFill(cells, regionIds, cols, rows, x, y, regionCount);
+                    }
+                }
+            }
+
+            grid.regionIds = regionIds;
+            return { ids: regionIds, count: regionCount };
+        }
+
+        function floodFill(cells, regionIds, cols, rows, startX, startY, regionId) {
+            const stack = [[startX, startY]];
+
+            while (stack.length > 0) {
+                const [x, y] = stack.pop();
+                const idx = y * cols + x;
+
+                if (x < 0 || x >= cols || y < 0 || y >= rows) continue;
+                if (cells[idx] !== 1 || regionIds[idx] !== 0) continue;
+
+                regionIds[idx] = regionId;
+
+                // 4-connected neighbors
+                stack.push([x + 1, y]);
+                stack.push([x - 1, y]);
+                stack.push([x, y + 1]);
+                stack.push([x, y - 1]);
+            }
+        }
+
+        // ============================================
+        // Step 5: Contour Extraction (Marching Squares)
+        // Estrae TUTTI i contorni: outer boundary + holes interni
+        // ============================================
+
+        function extractContours(grid, regions, cellSize) {
+            const { cells, cols, rows, bounds } = grid;
+
+            // Usa Marching Squares per estrarre tutti i contorni
+            const allContours = marchingSquaresAllContours(cells, cols, rows, bounds, cellSize);
+
+            // Separa outer da holes basandosi sull'area signed
+            // CCW (area positiva) = outer, CW (area negativa) = hole
+            const result = [];
+
+            for (const contourData of allContours) {
+                if (contourData.contour.length >= 3) {
+                    result.push(contourData);
+                }
+            }
+
+            return result;
+        }
+
+        function marchingSquaresAllContours(cells, cols, rows, bounds, cellSize) {
+            const contours = [];
+            const visited = new Set(); // Track visited edges to avoid duplicates
+
+            // Scan for all boundary edges
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const idx = y * cols + x;
+
+                    // Check if this is a walkable cell
+                    if (cells[idx] !== 1) continue;
+
+                    // Check each edge of this cell for boundaries
+                    const edges = [
+                        { dx: 0, dy: -1, edge: 'top', ex: x, ey: y },      // top edge
+                        { dx: 1, dy: 0, edge: 'right', ex: x + 1, ey: y }, // right edge
+                        { dx: 0, dy: 1, edge: 'bottom', ex: x, ey: y + 1 }, // bottom edge
+                        { dx: -1, dy: 0, edge: 'left', ex: x, ey: y }      // left edge
+                    ];
+
+                    for (const e of edges) {
+                        const nx = x + e.dx;
+                        const ny = y + e.dy;
+                        const neighborIdx = ny * cols + nx;
+
+                        // Is this a boundary edge?
+                        const isOutside = nx < 0 || nx >= cols || ny < 0 || ny >= rows;
+                        const isBlocked = !isOutside && cells[neighborIdx] !== 1;
+
+                        if (isOutside || isBlocked) {
+                            const edgeKey = `${e.ex},${e.ey},${e.edge}`;
+
+                            if (!visited.has(edgeKey)) {
+                                // Trace contour starting from this edge
+                                const contour = traceContour(cells, cols, rows, x, y, e.edge, visited, bounds, cellSize);
+
+                                if (contour.length >= 3) {
+                                    const area = signedArea(contour);
+                                    contours.push({
+                                        contour: contour,
+                                        area: area,
+                                        isHole: area < 0 // CW = hole (area negativa)
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return contours;
+        }
+
+        function traceContour(cells, cols, rows, startX, startY, startEdge, visited, bounds, cellSize) {
+            const contour = [];
+
+            let x = startX;
+            let y = startY;
+            let edge = startEdge;
+            let iterations = 0;
+            const maxIterations = cols * rows * 4;
+
+            do {
+                // Get the two corners of this edge in world coordinates
+                const corners = getEdgeCorners(x, y, edge, bounds, cellSize);
+
+                // Add first corner if contour is empty or different from last point
+                if (contour.length === 0) {
+                    contour.push(corners.start);
+                } else {
+                    const last = contour[contour.length - 1];
+                    if (Math.abs(last.x - corners.start.x) > 0.01 || Math.abs(last.y - corners.start.y) > 0.01) {
+                        contour.push(corners.start);
+                    }
+                }
+
+                // Mark this edge as visited
+                const edgeKey = getEdgeKey(x, y, edge);
+                visited.add(edgeKey);
+
+                // Find next edge (turn right, following the boundary)
+                const next = findNextEdge(cells, cols, rows, x, y, edge);
+
+                if (!next) break;
+
+                x = next.x;
+                y = next.y;
+                edge = next.edge;
+
+                iterations++;
+
+                // Check if we've returned to start
+                if (x === startX && y === startY && edge === startEdge) {
+                    break;
+                }
+
+            } while (iterations < maxIterations);
+
+            return contour;
+        }
+
+        function getEdgeCorners(x, y, edge, bounds, cellSize) {
+            const x0 = bounds.minX + x * cellSize;
+            const y0 = bounds.minY + y * cellSize;
+            const x1 = x0 + cellSize;
+            const y1 = y0 + cellSize;
+
+            switch (edge) {
+                case 'top':    return { start: { x: x0, y: y0 }, end: { x: x1, y: y0 } };
+                case 'right':  return { start: { x: x1, y: y0 }, end: { x: x1, y: y1 } };
+                case 'bottom': return { start: { x: x1, y: y1 }, end: { x: x0, y: y1 } };
+                case 'left':   return { start: { x: x0, y: y1 }, end: { x: x0, y: y0 } };
+            }
+        }
+
+        function getEdgeKey(x, y, edge) {
+            // Normalize edge key so opposite edges from adjacent cells map to same key
+            switch (edge) {
+                case 'top':    return `h,${x},${y}`;
+                case 'bottom': return `h,${x},${y + 1}`;
+                case 'left':   return `v,${x},${y}`;
+                case 'right':  return `v,${x + 1},${y}`;
+            }
+        }
+
+        function findNextEdge(cells, cols, rows, x, y, currentEdge) {
+            // When following boundary clockwise (from inside the walkable area):
+            // From each edge, try turning right first, then straight, then left
+
+            const transitions = {
+                'top': [
+                    { edge: 'right', dx: 0, dy: 0 },    // Turn right (stay in cell)
+                    { edge: 'top', dx: 1, dy: 0 },      // Go straight (next cell right)
+                    { edge: 'left', dx: 1, dy: -1 }     // Turn left (diagonal cell)
+                ],
+                'right': [
+                    { edge: 'bottom', dx: 0, dy: 0 },
+                    { edge: 'right', dx: 0, dy: 1 },
+                    { edge: 'top', dx: 1, dy: 1 }
+                ],
+                'bottom': [
+                    { edge: 'left', dx: 0, dy: 0 },
+                    { edge: 'bottom', dx: -1, dy: 0 },
+                    { edge: 'right', dx: -1, dy: 1 }
+                ],
+                'left': [
+                    { edge: 'top', dx: 0, dy: 0 },
+                    { edge: 'left', dx: 0, dy: -1 },
+                    { edge: 'bottom', dx: -1, dy: -1 }
+                ]
+            };
+
+            for (const t of transitions[currentEdge]) {
+                const nx = x + t.dx;
+                const ny = y + t.dy;
+
+                // Check if the new cell is valid and walkable
+                if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
+                    if (cells[ny * cols + nx] === 1) {
+                        // Check if this edge is actually a boundary
+                        if (isEdgeBoundary(cells, cols, rows, nx, ny, t.edge)) {
+                            return { x: nx, y: ny, edge: t.edge };
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        function isEdgeBoundary(cells, cols, rows, x, y, edge) {
+            const neighbors = {
+                'top': { dx: 0, dy: -1 },
+                'right': { dx: 1, dy: 0 },
+                'bottom': { dx: 0, dy: 1 },
+                'left': { dx: -1, dy: 0 }
+            };
+
+            const n = neighbors[edge];
+            const nx = x + n.dx;
+            const ny = y + n.dy;
+
+            if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) return true;
+            return cells[ny * cols + nx] !== 1;
+        }
+
+        function signedArea(polygon) {
+            let area = 0;
+            for (let i = 0; i < polygon.length; i++) {
+                const j = (i + 1) % polygon.length;
+                area += polygon[i].x * polygon[j].y;
+                area -= polygon[j].x * polygon[i].y;
+            }
+            return area / 2;
+        }
+
+        // ============================================
+        // Step 6: Contour Simplification (Douglas-Peucker)
+        // ============================================
+
+        function simplifyContour(contour, tolerance) {
+            if (contour.length < 3) return contour;
+            if (tolerance <= 0) return contour;
+
+            // Douglas-Peucker for closed polygon
+            const result = douglasPeucker(contour, tolerance);
+
+            // Ensure minimum 3 points
+            return result.length >= 3 ? result : contour;
+        }
+
+        function douglasPeucker(points, tolerance) {
+            if (points.length <= 2) return points;
+
+            // Find point with maximum distance
+            let maxDist = 0;
+            let maxIndex = 0;
+
+            const first = points[0];
+            const last = points[points.length - 1];
+
+            for (let i = 1; i < points.length - 1; i++) {
+                const dist = perpendicularDistance(points[i], first, last);
+                if (dist > maxDist) {
+                    maxDist = dist;
+                    maxIndex = i;
+                }
+            }
+
+            // If max distance is greater than tolerance, recursively simplify
+            if (maxDist > tolerance) {
+                const left = douglasPeucker(points.slice(0, maxIndex + 1), tolerance);
+                const right = douglasPeucker(points.slice(maxIndex), tolerance);
+
+                return [...left.slice(0, -1), ...right];
+            } else {
+                return [first, last];
+            }
+        }
+
+        function perpendicularDistance(point, lineStart, lineEnd) {
+            const dx = lineEnd.x - lineStart.x;
+            const dy = lineEnd.y - lineStart.y;
+            const len = Math.sqrt(dx * dx + dy * dy);
+
+            if (len < 0.0001) {
+                return Math.sqrt(
+                    (point.x - lineStart.x) ** 2 +
+                    (point.y - lineStart.y) ** 2
+                );
+            }
+
+            return Math.abs(
+                dy * point.x - dx * point.y +
+                lineEnd.x * lineStart.y - lineEnd.y * lineStart.x
+            ) / len;
+        }
+
+        // ============================================
+        // Step 7: Build NavMesh (Convex Decomposition)
+        // Gestisce outer boundary + holes interni
+        // ============================================
+
+        function buildNavMesh(contourDataList) {
+            const polygons = [];
+
+            // Separa outer boundaries da holes
+            const outers = contourDataList.filter(c => !c.isHole);
+            const holes = contourDataList.filter(c => c.isHole);
+
+            console.log(`Building NavMesh: ${outers.length} outer boundaries, ${holes.length} holes`);
+
+            // Per ogni outer boundary, trova gli holes contenuti al suo interno
+            for (const outerData of outers) {
+                const outer = ensureCCW(outerData.contour);
+
+                // Trova holes contenuti in questo outer
+                const containedHoles = [];
+                for (const holeData of holes) {
+                    // Verifica se il primo punto dell'hole è dentro l'outer
+                    if (holeData.contour.length > 0 &&
+                        isPointInPolygon(holeData.contour[0].x, holeData.contour[0].y, outer)) {
+                        // Gli holes devono essere CW
+                        containedHoles.push(ensureCW(holeData.contour));
+                    }
+                }
+
+                console.log(`Outer with ${outer.length} vertices, ${containedHoles.length} holes`);
+
+                // Triangola con gli holes
+                const triangles = triangulateWithHoles(outer, containedHoles);
+
+                if (triangles.length > 0) {
+                    // Merge triangoli in poligoni convessi
+                    const convexPolys = mergeTrianglesToConvex(triangles);
+                    polygons.push(...convexPolys);
+                }
+            }
+
+            return polygons;
+        }
+
+        function ensureCW(polygon) {
+            const area = signedArea(polygon);
+            if (area > 0) {
+                return [...polygon].reverse();
+            }
+            return [...polygon];
+        }
+
+        // Triangolazione con supporto per holes usando bridge edges
+        function triangulateWithHoles(outer, holes) {
+            if (holes.length === 0) {
+                // Nessun hole, usa ear clipping standard
+                return earClipTriangulate(outer);
+            }
+
+            // Connetti gli holes all'outer usando bridge edges
+            // Questo trasforma il problema in un singolo poligono semplice
+            const merged = mergeHolesIntoOuter(outer, holes);
+
+            if (merged.length < 3) {
+                console.warn('Failed to merge holes into outer');
+                return earClipTriangulate(outer);
+            }
+
+            return earClipTriangulate(merged);
+        }
+
+        function mergeHolesIntoOuter(outer, holes) {
+            // Copia l'outer
+            let result = [...outer];
+
+            // Ordina holes per coordinata X del punto più a destra
+            const sortedHoles = holes.map((hole, idx) => {
+                let maxX = -Infinity;
+                let maxXIndex = 0;
+                for (let i = 0; i < hole.length; i++) {
+                    if (hole[i].x > maxX) {
+                        maxX = hole[i].x;
+                        maxXIndex = i;
+                    }
+                }
+                return { hole, maxX, maxXIndex, originalIndex: idx };
+            }).sort((a, b) => b.maxX - a.maxX);
+
+            // Connetti ogni hole al poligono risultante
+            for (const holeData of sortedHoles) {
+                result = connectHoleToPolygon(result, holeData.hole, holeData.maxXIndex);
+            }
+
+            return result;
+        }
+
+        function connectHoleToPolygon(polygon, hole, holeRightmostIdx) {
+            // Trova il punto più a destra dell'hole
+            const holePoint = hole[holeRightmostIdx];
+
+            // Trova il punto visibile sul poligono esterno
+            // Traccia un raggio orizzontale verso destra e trova l'intersezione più vicina
+            let bestDist = Infinity;
+            let bestIdx = -1;
+            let bestPoint = null;
+
+            for (let i = 0; i < polygon.length; i++) {
+                const p1 = polygon[i];
+                const p2 = polygon[(i + 1) % polygon.length];
+
+                // Controlla se il raggio orizzontale da holePoint interseca questo edge
+                const intersection = rayEdgeIntersection(holePoint, p1, p2);
+
+                if (intersection && intersection.dist < bestDist) {
+                    // Verifica che il punto sia effettivamente visibile (no altri edge nel mezzo)
+                    if (isVisible(holePoint, intersection.point, polygon, hole)) {
+                        bestDist = intersection.dist;
+                        bestIdx = i;
+                        bestPoint = intersection.point;
+                    }
+                }
+            }
+
+            if (bestIdx === -1) {
+                // Fallback: trova il vertice più vicino del poligono
+                for (let i = 0; i < polygon.length; i++) {
+                    const dist = Math.hypot(polygon[i].x - holePoint.x, polygon[i].y - holePoint.y);
+                    if (dist < bestDist && isVisible(holePoint, polygon[i], polygon, hole)) {
+                        bestDist = dist;
+                        bestIdx = i;
+                        bestPoint = polygon[i];
+                    }
+                }
+            }
+
+            if (bestIdx === -1) {
+                console.warn('Could not find connection point for hole');
+                return polygon;
+            }
+
+            // Trova il vertice del poligono più vicino al punto di intersezione
+            // Se l'intersezione è su un edge, usa il vertice più vicino
+            let connectIdx = bestIdx;
+            const p1 = polygon[bestIdx];
+            const p2 = polygon[(bestIdx + 1) % polygon.length];
+            const d1 = Math.hypot(bestPoint.x - p1.x, bestPoint.y - p1.y);
+            const d2 = Math.hypot(bestPoint.x - p2.x, bestPoint.y - p2.y);
+
+            if (d2 < d1) {
+                connectIdx = (bestIdx + 1) % polygon.length;
+            }
+
+            // Costruisci il nuovo poligono con l'hole inserito
+            const result = [];
+
+            // Aggiungi vertici del poligono fino al punto di connessione
+            for (let i = 0; i <= connectIdx; i++) {
+                result.push({ ...polygon[i] });
+            }
+
+            // Aggiungi vertici dell'hole partendo dal punto più a destra
+            for (let i = 0; i < hole.length; i++) {
+                const idx = (holeRightmostIdx + i) % hole.length;
+                result.push({ ...hole[idx] });
+            }
+
+            // Aggiungi il primo punto dell'hole di nuovo (per chiudere il bridge)
+            result.push({ ...hole[holeRightmostIdx] });
+
+            // Aggiungi il punto di connessione di nuovo (per tornare all'outer)
+            result.push({ ...polygon[connectIdx] });
+
+            // Aggiungi i vertici rimanenti del poligono
+            for (let i = connectIdx + 1; i < polygon.length; i++) {
+                result.push({ ...polygon[i] });
+            }
+
+            return result;
+        }
+
+        function rayEdgeIntersection(rayStart, edgeP1, edgeP2) {
+            // Raggio orizzontale verso destra da rayStart
+            // Trova intersezione con l'edge edgeP1-edgeP2
+
+            // L'edge deve attraversare la Y del raggio
+            if ((edgeP1.y > rayStart.y) === (edgeP2.y > rayStart.y)) {
+                return null; // Edge non attraversa la Y del raggio
+            }
+
+            // Calcola X dell'intersezione
+            const t = (rayStart.y - edgeP1.y) / (edgeP2.y - edgeP1.y);
+            const intersectX = edgeP1.x + t * (edgeP2.x - edgeP1.x);
+
+            // Deve essere a destra del punto di partenza
+            if (intersectX <= rayStart.x) {
+                return null;
+            }
+
+            return {
+                point: { x: intersectX, y: rayStart.y },
+                dist: intersectX - rayStart.x,
+                t: t
+            };
+        }
+
+        function isVisible(from, to, polygon, hole) {
+            // Semplificazione: verifica che il segmento from-to non intersechi
+            // altri edge del poligono (eccetto quelli adiacenti ai punti)
+
+            const checkIntersection = (poly) => {
+                for (let i = 0; i < poly.length; i++) {
+                    const p1 = poly[i];
+                    const p2 = poly[(i + 1) % poly.length];
+
+                    // Salta se uno degli endpoint è uguale ai nostri punti
+                    if (pointsClose(p1, from, 0.1) || pointsClose(p2, from, 0.1) ||
+                        pointsClose(p1, to, 0.1) || pointsClose(p2, to, 0.1)) {
+                        continue;
+                    }
+
+                    if (segmentsIntersect(from, to, p1, p2)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            if (checkIntersection(polygon)) return false;
+            if (hole && checkIntersection(hole)) return false;
+
+            return true;
+        }
+
+        function segmentsIntersect(a1, a2, b1, b2) {
+            const d1 = direction(b1, b2, a1);
+            const d2 = direction(b1, b2, a2);
+            const d3 = direction(a1, a2, b1);
+            const d4 = direction(a1, a2, b2);
+
+            if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+                ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+                return true;
+            }
+
+            return false;
+        }
+
+        function direction(p1, p2, p3) {
+            return (p3.x - p1.x) * (p2.y - p1.y) - (p2.x - p1.x) * (p3.y - p1.y);
+        }
+
+        function ensureCCW(polygon) {
+            let area = 0;
+            for (let i = 0; i < polygon.length; i++) {
+                const j = (i + 1) % polygon.length;
+                area += polygon[i].x * polygon[j].y;
+                area -= polygon[j].x * polygon[i].y;
+            }
+
+            if (area < 0) {
+                return [...polygon].reverse();
+            }
+            return polygon;
+        }
+
+        function decomposeToConvex(polygon) {
+            // Simple triangulation via ear clipping, then merge into convex polygons
+            const triangles = earClipTriangulate(polygon);
+            return mergeTrianglesToConvex(triangles);
+        }
+
+        function earClipTriangulate(polygon) {
+            const triangles = [];
+            const vertices = polygon.map((p, i) => ({ ...p, index: i }));
+
+            // Protezione contro loop infiniti
+            let maxIterations = vertices.length * vertices.length;
+            let iterations = 0;
+
+            while (vertices.length > 3 && iterations < maxIterations) {
+                iterations++;
+                let earFound = false;
+
+                for (let i = 0; i < vertices.length; i++) {
+                    const prev = vertices[(i - 1 + vertices.length) % vertices.length];
+                    const curr = vertices[i];
+                    const next = vertices[(i + 1) % vertices.length];
+
+                    // Check if this is a convex vertex
+                    if (!isConvexVertex(prev, curr, next)) continue;
+
+                    // Check if any other vertex is inside this triangle
+                    let isEar = true;
+                    for (let j = 0; j < vertices.length; j++) {
+                        if (j === (i - 1 + vertices.length) % vertices.length ||
+                            j === i ||
+                            j === (i + 1) % vertices.length) continue;
+
+                        if (pointInTriangle(vertices[j], prev, curr, next)) {
+                            isEar = false;
+                            break;
+                        }
+                    }
+
+                    if (isEar) {
+                        triangles.push([
+                            { x: prev.x, y: prev.y },
+                            { x: curr.x, y: curr.y },
+                            { x: next.x, y: next.y }
+                        ]);
+                        vertices.splice(i, 1);
+                        earFound = true;
+                        break;
+                    }
+                }
+
+                if (!earFound) {
+                    // Fallback: just take any triangle to make progress
+                    if (vertices.length >= 3) {
+                        triangles.push([
+                            { x: vertices[0].x, y: vertices[0].y },
+                            { x: vertices[1].x, y: vertices[1].y },
+                            { x: vertices[2].x, y: vertices[2].y }
+                        ]);
+                        vertices.splice(1, 1);
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Add last triangle
+            if (vertices.length === 3) {
+                triangles.push([
+                    { x: vertices[0].x, y: vertices[0].y },
+                    { x: vertices[1].x, y: vertices[1].y },
+                    { x: vertices[2].x, y: vertices[2].y }
+                ]);
+            }
+
+            if (iterations >= maxIterations) {
+                console.warn('earClipTriangulate: max iterations reached');
+            }
+
+            return triangles;
+        }
+
+        function isConvexVertex(prev, curr, next) {
+            const cross = (curr.x - prev.x) * (next.y - curr.y) -
+                          (curr.y - prev.y) * (next.x - curr.x);
+            return cross >= 0;
+        }
+
+        function pointInTriangle(p, a, b, c) {
+            const sign = (p1, p2, p3) => {
+                return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y);
+            };
+
+            const d1 = sign(p, a, b);
+            const d2 = sign(p, b, c);
+            const d3 = sign(p, c, a);
+
+            const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+            return !(hasNeg && hasPos);
+        }
+
+        // Hertel-Mehlhorn merge
+        function mergeTrianglesToConvex(triangles) {
+            if (triangles.length === 0) return [];
+
+            let polygons = triangles.map(t => [...t]);
+            let changed = true;
+            let iterations = 0;
+            const maxIterations = polygons.length * polygons.length;
+
+            while (changed && iterations < maxIterations) {
+                iterations++;
+                changed = false;
+
+                for (let i = 0; i < polygons.length && !changed; i++) {
+                    for (let j = i + 1; j < polygons.length && !changed; j++) {
+                        const merged = tryMerge(polygons[i], polygons[j]);
+                        if (merged && merged.length >= 3 && isConvexPolygon(merged)) {
+                            polygons[i] = merged;
+                            polygons.splice(j, 1);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
+            if (iterations >= maxIterations) {
+                console.warn('mergeTrianglesToConvex: max iterations reached');
+            }
+
+            return polygons;
+        }
+
+        function tryMerge(polyA, polyB) {
+            // Find shared edge
+            const TOLERANCE = 0.5;
+
+            for (let i = 0; i < polyA.length; i++) {
+                const a1 = polyA[i];
+                const a2 = polyA[(i + 1) % polyA.length];
+
+                for (let j = 0; j < polyB.length; j++) {
+                    const b1 = polyB[j];
+                    const b2 = polyB[(j + 1) % polyB.length];
+
+                    // Check if edges match (in opposite direction)
+                    if (pointsClose(a1, b2, TOLERANCE) && pointsClose(a2, b1, TOLERANCE)) {
+                        // Merge polygons
+                        const result = [];
+
+                        // Add polyA vertices except the shared edge end
+                        for (let k = 0; k < polyA.length; k++) {
+                            if (k !== (i + 1) % polyA.length) {
+                                result.push({ ...polyA[(i + 1 + k) % polyA.length] });
+                            }
+                        }
+
+                        // Add polyB vertices except the shared edge
+                        for (let k = 2; k < polyB.length; k++) {
+                            result.push({ ...polyB[(j + k) % polyB.length] });
+                        }
+
+                        return removeDuplicateVertices(result, TOLERANCE);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        function pointsClose(p1, p2, tolerance) {
+            return Math.abs(p1.x - p2.x) < tolerance && Math.abs(p1.y - p2.y) < tolerance;
+        }
+
+        function removeDuplicateVertices(polygon, tolerance) {
+            const result = [];
+            for (let i = 0; i < polygon.length; i++) {
+                const curr = polygon[i];
+                const next = polygon[(i + 1) % polygon.length];
+                if (!pointsClose(curr, next, tolerance)) {
+                    result.push(curr);
+                }
+            }
+            return result;
+        }
+
+        function isConvexPolygon(polygon) {
+            if (polygon.length < 3) return false;
+
+            let sign = 0;
+
+            for (let i = 0; i < polygon.length; i++) {
+                const p0 = polygon[i];
+                const p1 = polygon[(i + 1) % polygon.length];
+                const p2 = polygon[(i + 2) % polygon.length];
+
+                const cross = (p1.x - p0.x) * (p2.y - p1.y) - (p1.y - p0.y) * (p2.x - p1.x);
+
+                if (Math.abs(cross) > 0.001) {
+                    const currentSign = cross > 0 ? 1 : -1;
+                    if (sign === 0) {
+                        sign = currentSign;
+                    } else if (sign !== currentSign) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        // ============================================
+        // Export
+        // ============================================
+
+        function exportNavMesh() {
+            if (!navmesh || navmesh.length === 0) {
+                alert('Please generate a navmesh first');
+                return;
+            }
+
+            const data = {
+                metadata: {
+                    generatedAt: Date.now(),
+                    generator: 'recast-like',
+                    settings: {
+                        cellSize: parseInt(document.getElementById('cell-size').value),
+                        agentRadius: parseInt(document.getElementById('agent-radius').value),
+                        simplifyThreshold: parseFloat(document.getElementById('simplify-threshold').value)
+                    }
+                },
+                polygons: navmesh.map((poly, idx) => ({
+                    id: `nav_${idx}`,
+                    vertices: poly
+                }))
+            };
+
+            const dataStr = 'data:text/json;charset=utf-8,' +
+                encodeURIComponent(JSON.stringify(data, null, 2));
+            const anchor = document.createElement('a');
+            anchor.setAttribute('href', dataStr);
+            anchor.setAttribute('download', 'navmesh.json');
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+
+            updateStatus('NavMesh exported');
+        }
+
+        // ============================================
+        // Rendering
+        // ============================================
+
+        function render() {
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(camera.offsetX, camera.offsetY);
+            ctx.scale(camera.zoom, camera.zoom);
+
+            // Draw background grid
+            drawBackgroundGrid();
+
+            if (mapData) {
+                // Draw navmesh first (background)
+                if (navmesh && document.getElementById('show-navmesh').checked) {
+                    drawNavMesh();
+                }
+
+                // Draw processed contours (after offset)
+                if (rasterData && rasterData.contours && document.getElementById('show-contours').checked) {
+                    drawContours(rasterData.contours);
+                }
+
+                // Draw original geometry on top
+                drawPolygon(mapData.outer, '#4a9eff', null, 2);
+                for (const hole of (mapData.holes || [])) {
+                    drawPolygon(hole, '#e94560', '#e9456020', 2);
+                }
+            }
+
+            ctx.restore();
+        }
+
+        function drawBackgroundGrid() {
+            const step = 50;
+            const bounds = {
+                minX: -camera.offsetX / camera.zoom - 100,
+                minY: -camera.offsetY / camera.zoom - 100,
+                maxX: (canvas.width - camera.offsetX) / camera.zoom + 100,
+                maxY: (canvas.height - camera.offsetY) / camera.zoom + 100
+            };
+
+            ctx.strokeStyle = '#ffffff08';
+            ctx.lineWidth = 1 / camera.zoom;
+
+            ctx.beginPath();
+            for (let x = Math.floor(bounds.minX / step) * step; x < bounds.maxX; x += step) {
+                ctx.moveTo(x, bounds.minY);
+                ctx.lineTo(x, bounds.maxY);
+            }
+            for (let y = Math.floor(bounds.minY / step) * step; y < bounds.maxY; y += step) {
+                ctx.moveTo(bounds.minX, y);
+                ctx.lineTo(bounds.maxX, y);
+            }
+            ctx.stroke();
+        }
+
+        function drawRasterGrid(grid) {
+            const { cells, cols, rows, bounds, cellSize } = grid;
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    if (cells[y * cols + x] === 1) {
+                        ctx.fillStyle = '#00ff0015';
+                        ctx.fillRect(
+                            bounds.minX + x * cellSize,
+                            bounds.minY + y * cellSize,
+                            cellSize, cellSize
+                        );
+                    }
+                }
+            }
+        }
+
+        function drawDistanceField(grid) {
+            const { distance, cols, rows, bounds, cellSize } = grid;
+            if (!distance) return;
+
+            const maxDist = Math.max(...distance);
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const d = distance[y * cols + x];
+                    if (d > 0) {
+                        const intensity = Math.min(d / maxDist, 1);
+                        ctx.fillStyle = `rgba(0, 150, 255, ${intensity * 0.3})`;
+                        ctx.fillRect(
+                            bounds.minX + x * cellSize,
+                            bounds.minY + y * cellSize,
+                            cellSize, cellSize
+                        );
+                    }
+                }
+            }
+        }
+
+        function drawRegions(grid, regions) {
+            const { cols, rows, bounds, cellSize } = grid;
+            const { ids } = regions;
+
+            const colors = [
+                '#e74c3c', '#3498db', '#2ecc71', '#f39c12',
+                '#9b59b6', '#1abc9c', '#e91e63', '#00bcd4',
+                '#ff5722', '#607d8b', '#795548', '#ffc107'
+            ];
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const regionId = ids[y * cols + x];
+                    if (regionId > 0) {
+                        const color = colors[(regionId - 1) % colors.length];
+                        ctx.fillStyle = color + '40';
+                        ctx.fillRect(
+                            bounds.minX + x * cellSize,
+                            bounds.minY + y * cellSize,
+                            cellSize, cellSize
+                        );
+                    }
+                }
+            }
+        }
+
+        function drawContours(contours) {
+            const outerColors = [
+                '#4ecdc4', '#95e1d3', '#a8d8ea', '#87ceeb'
+            ];
+            const holeColors = [
+                '#ff6b6b', '#f38181', '#fcbad3', '#ffb6c1'
+            ];
+
+            contours.forEach((contourData, idx) => {
+                const contour = contourData.contour;
+                if (contour.length < 2) return;
+
+                const colors = contourData.isHole ? holeColors : outerColors;
+                const color = colors[idx % colors.length];
+
+                ctx.beginPath();
+                ctx.moveTo(contour[0].x, contour[0].y);
+                for (let i = 1; i < contour.length; i++) {
+                    ctx.lineTo(contour[i].x, contour[i].y);
+                }
+                ctx.closePath();
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3 / camera.zoom;
+                ctx.stroke();
+
+                // Draw vertices
+                for (const p of contour) {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 4 / camera.zoom, 0, Math.PI * 2);
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                }
+
+                // Draw label
+                const center = getPolygonCenter(contour);
+                ctx.fillStyle = color;
+                ctx.font = `${14 / camera.zoom}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.fillText(contourData.isHole ? 'HOLE' : 'OUTER', center.x, center.y);
+            });
+        }
+
+        function getPolygonCenter(polygon) {
+            let cx = 0, cy = 0;
+            for (const p of polygon) {
+                cx += p.x;
+                cy += p.y;
+            }
+            return { x: cx / polygon.length, y: cy / polygon.length };
+        }
+
+        function drawNavMesh() {
+            const colors = [
+                '#3498db60', '#2ecc7160', '#e74c3c60', '#9b59b660',
+                '#f39c1260', '#1abc9c60', '#e91e6360', '#00bcd460'
+            ];
+
+            navmesh.forEach((poly, idx) => {
+                if (poly.length < 3) return;
+
+                ctx.beginPath();
+                ctx.moveTo(poly[0].x, poly[0].y);
+                for (let i = 1; i < poly.length; i++) {
+                    ctx.lineTo(poly[i].x, poly[i].y);
+                }
+                ctx.closePath();
+
+                ctx.fillStyle = colors[idx % colors.length];
+                ctx.fill();
+
+                ctx.strokeStyle = '#ffffffa0';
+                ctx.lineWidth = 1.5 / camera.zoom;
+                ctx.stroke();
+            });
+        }
+
+        function drawPolygon(polygon, strokeColor, fillColor, lineWidth) {
+            if (!polygon || polygon.length < 3) return;
+
+            ctx.beginPath();
+            ctx.moveTo(polygon[0].x, polygon[0].y);
+            for (let i = 1; i < polygon.length; i++) {
+                ctx.lineTo(polygon[i].x, polygon[i].y);
+            }
+            ctx.closePath();
+
+            if (fillColor) {
+                ctx.fillStyle = fillColor;
+                ctx.fill();
+            }
+
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = lineWidth / camera.zoom;
+            ctx.stroke();
+        }
+
+        // ============================================
+        // Status
+        // ============================================
+
+        function updateStatus(text) {
+            document.getElementById('status-text').textContent = text;
+        }
+
+        function updateStats(text) {
+            document.getElementById('stats-text').textContent = text;
+        }
+
+        // ============================================
+        // Start
+        // ============================================
+
+        init();
+    </script>
+</body>
+</html>

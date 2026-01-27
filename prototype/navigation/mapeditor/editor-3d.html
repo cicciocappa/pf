@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Level Editor with Heightmap</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        #app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* Tab Bar */
+        #tab-bar {
+            display: flex;
+            background: #16213e;
+            border-bottom: 2px solid #0f3460;
+            padding: 0 10px;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-btn.active {
+            color: #4da6ff;
+            border-bottom-color: #4da6ff;
+        }
+
+        /* Main Content */
+        #main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Left Sidebar */
+        #sidebar {
+            width: 280px;
+            background: #16213e;
+            border-right: 1px solid #0f3460;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .panel {
+            padding: 15px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .panel-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: #4da6ff;
+            margin-bottom: 12px;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 11px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+
+        .form-group input[type="number"],
+        .form-group input[type="range"],
+        .form-group select {
+            width: 100%;
+            padding: 8px;
+            background: #0f3460;
+            border: 1px solid #234;
+            color: #fff;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .form-group input[type="range"] {
+            padding: 0;
+        }
+
+        /* Tool Buttons */
+        .tool-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+
+        .tool-btn {
+            padding: 10px;
+            background: #0f3460;
+            border: 1px solid #234;
+            color: #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .tool-btn:hover {
+            background: #1a4a7a;
+            color: #fff;
+        }
+
+        .tool-btn.active {
+            background: #4da6ff;
+            color: #000;
+            border-color: #4da6ff;
+        }
+
+        /* Action Buttons */
+        .action-btn {
+            width: 100%;
+            padding: 12px;
+            margin-top: 8px;
+            background: #4da6ff;
+            border: none;
+            color: #000;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .action-btn:hover {
+            background: #6db8ff;
+        }
+
+        .action-btn.secondary {
+            background: #0f3460;
+            color: #4da6ff;
+            border: 1px solid #4da6ff;
+        }
+
+        .action-btn.secondary:hover {
+            background: #1a4a7a;
+        }
+
+        .action-btn.danger {
+            background: #ff4757;
+            color: #fff;
+        }
+
+        .action-btn.danger:hover {
+            background: #ff6b7a;
+        }
+
+        /* Canvas Container */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #0d0d1a;
+        }
+
+        #canvas-container canvas {
+            display: block;
+        }
+
+        .tab-content {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #heightmap-tab {
+            display: flex;
+        }
+
+        #heightmap-canvas {
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+        }
+
+        #three-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Status Bar */
+        #status-bar {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            padding: 6px 12px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 4px;
+            font-size: 12px;
+            color: #888;
+        }
+
+        /* Building Selector */
+        #building-selector {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #16213e;
+            border: 2px solid #4da6ff;
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 1000;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        #building-selector.visible {
+            display: block;
+        }
+
+        .building-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .building-item {
+            padding: 15px 10px;
+            background: #0f3460;
+            border: 1px solid #234;
+            border-radius: 4px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .building-item:hover {
+            background: #1a4a7a;
+            border-color: #4da6ff;
+        }
+
+        .building-item.selected {
+            background: #4da6ff;
+            color: #000;
+        }
+
+        /* Overlay */
+        #overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+        }
+
+        #overlay.visible {
+            display: block;
+        }
+
+        /* Checkbox styling */
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* Value display next to range */
+        .range-value {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .range-value input[type="range"] {
+            flex: 1;
+        }
+
+        .range-value span {
+            min-width: 40px;
+            text-align: right;
+            font-size: 12px;
+            color: #4da6ff;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Tab Bar -->
+        <div id="tab-bar">
+            <button class="tab-btn active" data-tab="heightmap">Heightmap</button>
+            <button class="tab-btn" data-tab="3d">3D View</button>
+        </div>
+
+        <!-- Main Content -->
+        <div id="main-content">
+            <!-- Sidebar -->
+            <aside id="sidebar">
+                <!-- Map Settings -->
+                <div class="panel">
+                    <div class="panel-title">Map Settings</div>
+                    <div class="form-group">
+                        <label>Width (meters, multiple of 64)</label>
+                        <input type="number" id="map-width" value="256" step="64" min="64" max="2048">
+                    </div>
+                    <div class="form-group">
+                        <label>Height (meters, multiple of 64)</label>
+                        <input type="number" id="map-height" value="256" step="64" min="64" max="2048">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Height (meters)</label>
+                        <input type="number" id="max-height" value="50" step="5" min="10" max="200">
+                    </div>
+                    <div class="form-group">
+                        <label>Heightmap Resolution</label>
+                        <select id="heightmap-resolution">
+                            <option value="64">64x64</option>
+                            <option value="128" selected>128x128</option>
+                            <option value="256">256x256</option>
+                            <option value="512">512x512</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Heightmap Tools (visible in heightmap tab) -->
+                <div class="panel" id="heightmap-tools-panel">
+                    <div class="panel-title">Heightmap Tools</div>
+                    <div class="tool-grid">
+                        <button class="tool-btn active" data-tool="raise">Raise</button>
+                        <button class="tool-btn" data-tool="lower">Lower</button>
+                        <button class="tool-btn" data-tool="smooth">Smooth</button>
+                        <button class="tool-btn" data-tool="flatten">Flatten</button>
+                    </div>
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label>Brush Radius</label>
+                        <div class="range-value">
+                            <input type="range" id="brush-radius" min="1" max="50" value="10">
+                            <span id="brush-radius-val">10</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Brush Strength</label>
+                        <div class="range-value">
+                            <input type="range" id="brush-strength" min="1" max="100" value="20">
+                            <span id="brush-strength-val">0.20</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Brush Falloff</label>
+                        <div class="range-value">
+                            <input type="range" id="brush-falloff" min="0" max="100" value="50">
+                            <span id="brush-falloff-val">0.50</span>
+                        </div>
+                    </div>
+                    <button class="action-btn secondary" id="btn-generate-terrain">Generate Terrain</button>
+                    <button class="action-btn secondary" id="btn-clear-heightmap">Clear</button>
+                </div>
+
+                <!-- 3D Tools (visible in 3D tab) -->
+                <div class="panel" id="3d-tools-panel" style="display: none;">
+                    <div class="panel-title">3D Tools</div>
+                    <div class="tool-grid">
+                        <button class="tool-btn active" data-tool-3d="select">Select</button>
+                        <button class="tool-btn" data-tool-3d="building">Building</button>
+                        <button class="tool-btn" data-tool-3d="wall">Wall</button>
+                        <button class="tool-btn" data-tool-3d="outer">Outer</button>
+                    </div>
+                    <div class="checkbox-group" style="margin-top: 15px;">
+                        <input type="checkbox" id="chk-snap-grid" checked>
+                        <label for="chk-snap-grid">Snap to Grid</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="chk-show-navmesh">
+                        <label for="chk-show-navmesh">Show NavMesh</label>
+                    </div>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="chk-wireframe">
+                        <label for="chk-wireframe">Wireframe Terrain</label>
+                    </div>
+                </div>
+
+                <!-- Wall Settings -->
+                <div class="panel" id="wall-settings-panel" style="display: none;">
+                    <div class="panel-title">Wall Settings</div>
+                    <div class="form-group">
+                        <label>Wall Type</label>
+                        <select id="wall-type">
+                            <option value="stone">Stone (4m)</option>
+                            <option value="wooden">Wooden (3m)</option>
+                            <option value="castle">Castle (8m)</option>
+                            <option value="palisade">Palisade (3m)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Thickness (meters)</label>
+                        <input type="number" id="wall-thickness" value="2" step="0.5" min="0.5" max="10">
+                    </div>
+                </div>
+
+                <!-- Actions -->
+                <div class="panel">
+                    <div class="panel-title">Actions</div>
+                    <button class="action-btn" id="btn-bake-navmesh">Bake NavMesh</button>
+                    <button class="action-btn secondary" id="btn-export-navcat">Export Navcat</button>
+                    <button class="action-btn secondary" id="btn-export-map">Export Map</button>
+                    <button class="action-btn secondary" id="btn-import-map">Import Map</button>
+                    <input type="file" id="file-import" accept=".json" style="display: none;">
+                </div>
+            </aside>
+
+            <!-- Canvas Container -->
+            <div id="canvas-container">
+                <!-- Heightmap Tab -->
+                <div class="tab-content" id="heightmap-tab">
+                    <canvas id="heightmap-canvas"></canvas>
+                </div>
+
+                <!-- 3D Tab -->
+                <div class="tab-content" id="3d-tab" style="display: none;">
+                    <div id="three-container"></div>
+                </div>
+
+                <div id="status-bar">Ready</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Building Selector Modal -->
+    <div id="overlay"></div>
+    <div id="building-selector">
+        <div class="panel-title">Select Building</div>
+        <div class="building-grid" id="building-grid">
+            <div class="building-item" data-template="SMALL_HOUSE">Small House</div>
+            <div class="building-item" data-template="HOUSE">House</div>
+            <div class="building-item" data-template="LARGE_HOUSE">Large House</div>
+            <div class="building-item" data-template="BARRACKS">Barracks</div>
+            <div class="building-item" data-template="TOWER">Tower</div>
+            <div class="building-item" data-template="MAGIC_TOWER">Magic Tower</div>
+            <div class="building-item" data-template="CASTLE">Castle</div>
+            <div class="building-item" data-template="KEEP">Keep</div>
+            <div class="building-item" data-template="ngon_4">Square</div>
+            <div class="building-item" data-template="ngon_6">Hexagon</div>
+            <div class="building-item" data-template="ngon_8">Octagon</div>
+            <div class="building-item" data-template="ngon_12">Cylinder</div>
+        </div>
+        <button class="action-btn" id="btn-close-selector" style="margin-top: 15px;">Cancel</button>
+    </div>
+
+    <!-- Three.js from CDN -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <!-- External Libraries -->
+    <script src="js/clipper.js"></script>
+    <script src="js/poly2tri.min.js"></script>
+
+    <!-- Main Application -->
+    <script type="module">
+        import { MapSettings } from './js/core/map-settings.js';
+        import { TabManager } from './js/core/tab-manager.js';
+        import { HeightmapData } from './js/heightmap/heightmap-data.js';
+        import { HeightmapEditor, ToolType } from './js/heightmap/heightmap-editor.js';
+        import { SceneManager } from './js/three/scene-manager.js';
+        import { TerrainMesh } from './js/three/terrain-mesh.js';
+        import { Building3D } from './js/three/building-3d.js';
+        import { Wall3D } from './js/three/wall-3d.js';
+        import { Controls3D, ToolMode } from './js/three/controls-3d.js';
+        import { NavmeshExporter } from './js/three/navmesh-exporter.js';
+        import { Geometry } from './js/geometry.js';
+        import { MapData } from './js/models/map-data.js';
+        import { Building } from './js/models/building.js';
+        import { Wall } from './js/models/wall.js';
+
+        class Editor3D {
+            constructor() {
+                // Initialize settings
+                this.settings = new MapSettings({
+                    width: 256,
+                    height: 256,
+                    maxHeight: 50,
+                    heightmapResolution: 128
+                });
+
+                // Initialize map data
+                this.mapData = new MapData();
+                this.geometry = new Geometry();
+
+                // Initialize heightmap
+                this.heightmapData = new HeightmapData(
+                    this.settings.heightmapResolution,
+                    this.settings.heightmapResolution
+                );
+
+                // Tab manager
+                this.tabManager = new TabManager();
+
+                // Scene manager (created when 3D tab is activated)
+                this.sceneManager = null;
+                this.controls3D = null;
+                this.heightmapEditor = null;
+
+                // Current state
+                this.currentTool3D = 'select';
+                this.selectedBuildingTemplate = null;
+                this.wallType = 'stone';
+                this.wallThickness = 2;
+
+                this._init();
+            }
+
+            _init() {
+                this._setupSettings();
+                this._setupTabs();
+                this._setupHeightmapEditor();
+                this._setupHeightmapTools();
+                this._setup3DTools();
+                this._setupActions();
+                this._setupBuildingSelector();
+
+                // Initial resize
+                this._onResize();
+                window.addEventListener('resize', () => this._onResize());
+            }
+
+            _setupSettings() {
+                const widthInput = document.getElementById('map-width');
+                const heightInput = document.getElementById('map-height');
+                const maxHeightInput = document.getElementById('max-height');
+                const resolutionSelect = document.getElementById('heightmap-resolution');
+
+                widthInput.value = this.settings.width;
+                heightInput.value = this.settings.height;
+                maxHeightInput.value = this.settings.maxHeight;
+                resolutionSelect.value = this.settings.heightmapResolution;
+
+                widthInput.addEventListener('change', () => {
+                    this.settings.width = parseInt(widthInput.value);
+                    widthInput.value = this.settings.width;
+                    this._onSettingsChanged();
+                });
+
+                heightInput.addEventListener('change', () => {
+                    this.settings.height = parseInt(heightInput.value);
+                    heightInput.value = this.settings.height;
+                    this._onSettingsChanged();
+                });
+
+                maxHeightInput.addEventListener('change', () => {
+                    this.settings.maxHeight = parseInt(maxHeightInput.value);
+                    this._onSettingsChanged();
+                });
+
+                resolutionSelect.addEventListener('change', () => {
+                    this.settings.heightmapResolution = parseInt(resolutionSelect.value);
+                    this.heightmapData.resize(
+                        this.settings.heightmapResolution,
+                        this.settings.heightmapResolution
+                    );
+                    if (this.heightmapEditor) {
+                        this.heightmapEditor.heightmap = this.heightmapData;
+                        this.heightmapEditor._bufferDirty = true;
+                        this.heightmapEditor.render();
+                    }
+                });
+            }
+
+            _setupTabs() {
+                const tabBtns = document.querySelectorAll('.tab-btn');
+                const heightmapTab = document.getElementById('heightmap-tab');
+                const threeDTab = document.getElementById('3d-tab');
+                const heightmapToolsPanel = document.getElementById('heightmap-tools-panel');
+                const threeDToolsPanel = document.getElementById('3d-tools-panel');
+
+                tabBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const tabId = btn.dataset.tab;
+
+                        // Update buttons
+                        tabBtns.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+
+                        // Show/hide tabs
+                        if (tabId === 'heightmap') {
+                            heightmapTab.style.display = '';
+                            threeDTab.style.display = 'none';
+                            heightmapToolsPanel.style.display = '';
+                            threeDToolsPanel.style.display = 'none';
+
+                            if (this.heightmapEditor) {
+                                this.heightmapEditor.render();
+                            }
+                        } else {
+                            heightmapTab.style.display = 'none';
+                            threeDTab.style.display = '';
+                            heightmapToolsPanel.style.display = 'none';
+                            threeDToolsPanel.style.display = '';
+
+                            this._init3DScene();
+                        }
+                    });
+                });
+            }
+
+            _setupHeightmapEditor() {
+                const canvas = document.getElementById('heightmap-canvas');
+                this.heightmapEditor = new HeightmapEditor(canvas, this.settings);
+                this.heightmapEditor.heightmap = this.heightmapData;
+                this.heightmapEditor.fitToView();
+            }
+
+            _setupHeightmapTools() {
+                // Tool buttons
+                const toolBtns = document.querySelectorAll('[data-tool]');
+                toolBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        toolBtns.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        this.heightmapEditor.setTool(btn.dataset.tool);
+                    });
+                });
+
+                // Brush settings
+                const radiusInput = document.getElementById('brush-radius');
+                const radiusVal = document.getElementById('brush-radius-val');
+                radiusInput.addEventListener('input', () => {
+                    this.heightmapEditor.brush.radius = parseInt(radiusInput.value);
+                    radiusVal.textContent = radiusInput.value;
+                });
+
+                const strengthInput = document.getElementById('brush-strength');
+                const strengthVal = document.getElementById('brush-strength-val');
+                strengthInput.addEventListener('input', () => {
+                    const val = parseInt(strengthInput.value) / 100;
+                    this.heightmapEditor.brush.strength = val;
+                    strengthVal.textContent = val.toFixed(2);
+                });
+
+                const falloffInput = document.getElementById('brush-falloff');
+                const falloffVal = document.getElementById('brush-falloff-val');
+                falloffInput.addEventListener('input', () => {
+                    const val = parseInt(falloffInput.value) / 100;
+                    this.heightmapEditor.brush.falloff = val;
+                    falloffVal.textContent = val.toFixed(2);
+                });
+
+                // Generate terrain button
+                document.getElementById('btn-generate-terrain').addEventListener('click', () => {
+                    this.heightmapEditor.generateTerrain({
+                        octaves: 4,
+                        persistence: 0.5,
+                        scale: 30
+                    });
+                });
+
+                // Clear button
+                document.getElementById('btn-clear-heightmap').addEventListener('click', () => {
+                    this.heightmapEditor.clear();
+                });
+            }
+
+            _setup3DTools() {
+                const toolBtns = document.querySelectorAll('[data-tool-3d]');
+                toolBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        toolBtns.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+
+                        const tool = btn.dataset.tool3d;
+                        this.currentTool3D = tool;
+
+                        if (tool === 'building') {
+                            this._showBuildingSelector();
+                        } else if (this.controls3D) {
+                            if (tool === 'wall') {
+                                this.controls3D.startWallDrawing();
+                                document.getElementById('wall-settings-panel').style.display = '';
+                            } else {
+                                this.controls3D.setMode(ToolMode.SELECT);
+                                document.getElementById('wall-settings-panel').style.display = 'none';
+                            }
+                        }
+                    });
+                });
+
+                // Checkboxes
+                document.getElementById('chk-snap-grid').addEventListener('change', (e) => {
+                    if (this.controls3D) {
+                        this.controls3D.snapToGrid = e.target.checked;
+                    }
+                });
+
+                document.getElementById('chk-show-navmesh').addEventListener('change', (e) => {
+                    if (this.sceneManager) {
+                        this.sceneManager.setNavmeshVisible(e.target.checked);
+                    }
+                });
+
+                document.getElementById('chk-wireframe').addEventListener('change', (e) => {
+                    if (this.sceneManager) {
+                        this.sceneManager.setWireframe(e.target.checked);
+                    }
+                });
+
+                // Wall settings
+                document.getElementById('wall-type').addEventListener('change', (e) => {
+                    this.wallType = e.target.value;
+                });
+
+                document.getElementById('wall-thickness').addEventListener('change', (e) => {
+                    this.wallThickness = parseFloat(e.target.value);
+                });
+            }
+
+            _setupActions() {
+                // Bake NavMesh
+                document.getElementById('btn-bake-navmesh').addEventListener('click', () => {
+                    this._bakeNavMesh();
+                });
+
+                // Export Navcat
+                document.getElementById('btn-export-navcat').addEventListener('click', () => {
+                    this._exportNavcat();
+                });
+
+                // Export Map
+                document.getElementById('btn-export-map').addEventListener('click', () => {
+                    this._exportMap();
+                });
+
+                // Import Map
+                document.getElementById('btn-import-map').addEventListener('click', () => {
+                    document.getElementById('file-import').click();
+                });
+
+                document.getElementById('file-import').addEventListener('change', (e) => {
+                    if (e.target.files.length > 0) {
+                        this._importMap(e.target.files[0]);
+                    }
+                });
+            }
+
+            _setupBuildingSelector() {
+                const overlay = document.getElementById('overlay');
+                const selector = document.getElementById('building-selector');
+                const closeBtn = document.getElementById('btn-close-selector');
+                const items = document.querySelectorAll('.building-item');
+
+                closeBtn.addEventListener('click', () => {
+                    overlay.classList.remove('visible');
+                    selector.classList.remove('visible');
+                });
+
+                overlay.addEventListener('click', () => {
+                    overlay.classList.remove('visible');
+                    selector.classList.remove('visible');
+                });
+
+                items.forEach(item => {
+                    item.addEventListener('click', () => {
+                        items.forEach(i => i.classList.remove('selected'));
+                        item.classList.add('selected');
+
+                        this.selectedBuildingTemplate = item.dataset.template;
+
+                        overlay.classList.remove('visible');
+                        selector.classList.remove('visible');
+
+                        if (this.controls3D) {
+                            this.controls3D.startBuildingPlacement(
+                                this.selectedBuildingTemplate,
+                                { createGeometry: (t) => Building3D.createPreviewGeometry(t) }
+                            );
+                        }
+                    });
+                });
+            }
+
+            _showBuildingSelector() {
+                document.getElementById('overlay').classList.add('visible');
+                document.getElementById('building-selector').classList.add('visible');
+            }
+
+            _init3DScene() {
+                if (this.sceneManager) {
+                    // Update terrain
+                    this._updateTerrain();
+                    return;
+                }
+
+                const container = document.getElementById('three-container');
+                this.sceneManager = new SceneManager(container, this.settings);
+                this.controls3D = new Controls3D(this.sceneManager, this.mapData);
+
+                // Listen to control events
+                this.controls3D.addListener((event, data) => {
+                    this._onControlEvent(event, data);
+                });
+
+                // Initial terrain
+                this._updateTerrain();
+
+                // Update status
+                this._setStatus('3D view initialized');
+            }
+
+            _updateTerrain() {
+                if (!this.sceneManager) return;
+
+                const terrainMesh = TerrainMesh.create(
+                    this.heightmapData,
+                    this.settings,
+                    this.sceneManager.materials.terrain
+                );
+
+                this.sceneManager.setTerrainMesh(terrainMesh);
+            }
+
+            _onControlEvent(event, data) {
+                switch (event) {
+                    case 'placeBuilding':
+                        this._createBuilding(data);
+                        break;
+
+                    case 'createWall':
+                        this._createWall(data);
+                        break;
+
+                    case 'deleteObject':
+                        this._deleteObject(data);
+                        break;
+
+                    case 'modeChange':
+                        this._setStatus(`Mode: ${data}`);
+                        break;
+                }
+            }
+
+            _createBuilding(data) {
+                const building = new Building({
+                    templateId: data.templateId,
+                    position: { x: data.x, y: data.z },
+                    rotation: data.rotation || 0
+                });
+
+                this.mapData.addBuilding(building);
+
+                // Create 3D mesh
+                const mesh = Building3D.createMesh(
+                    building,
+                    this.heightmapData,
+                    this.settings,
+                    this.sceneManager.materials.building
+                );
+
+                this.sceneManager.addBuildingMesh(building.id, mesh);
+                this._setStatus(`Placed ${data.templateId}`);
+            }
+
+            _createWall(data) {
+                // Convert 3D points to 2D for wall data
+                const points2D = data.points.map(p => ({ x: p.x, y: p.z }));
+
+                const wall = new Wall({
+                    points: points2D,
+                    thickness: this.wallThickness
+                });
+
+                this.mapData.addWall(wall);
+
+                // Create 3D mesh
+                const mesh = Wall3D.createMeshFollowingTerrain(
+                    wall,
+                    this.heightmapData,
+                    this.settings,
+                    this.sceneManager.materials.wall,
+                    this.wallType
+                );
+
+                if (mesh) {
+                    this.sceneManager.addWallMesh(wall.id, mesh);
+                }
+
+                this._setStatus('Wall created');
+            }
+
+            _deleteObject(data) {
+                if (data.type === 'building') {
+                    this.mapData.removeBuilding(data.id);
+                    this.sceneManager.removeBuildingMesh(data.id);
+                } else if (data.type === 'wall') {
+                    this.mapData.removeWall(data.id);
+                    this.sceneManager.removeWallMesh(data.id);
+                }
+
+                this._setStatus('Object deleted');
+            }
+
+            _bakeNavMesh() {
+                // Ensure we have an outer boundary
+                if (!this.mapData.outerPoly || this.mapData.outerPoly.length < 3) {
+                    // Create default outer boundary (map edges)
+                    this.mapData.outerPoly = [
+                        { x: 0, y: 0 },
+                        { x: this.settings.width, y: 0 },
+                        { x: this.settings.width, y: this.settings.height },
+                        { x: 0, y: this.settings.height }
+                    ];
+                }
+
+                const exporter = new NavmeshExporter(
+                    this.mapData,
+                    this.heightmapData,
+                    this.settings,
+                    this.geometry
+                );
+
+                try {
+                    const result = exporter.generate({
+                        mergeTriangles: true,
+                        agentRadius: 1,
+                        gridStep: 50
+                    });
+
+                    if (result) {
+                        // Visualize
+                        const navmeshMesh = exporter.createVisualizationMesh(
+                            result,
+                            this.sceneManager.materials.navmesh
+                        );
+                        this.sceneManager.setNavmeshMesh(navmeshMesh);
+
+                        // Store for export
+                        this._navmeshResult = result;
+
+                        this._setStatus(`NavMesh: ${result.stats.triangleCount} triangles, ${result.stats.vertexCount} vertices`);
+                        document.getElementById('chk-show-navmesh').checked = true;
+                    }
+                } catch (e) {
+                    console.error('NavMesh generation failed:', e);
+                    this._setStatus('NavMesh generation failed: ' + e.message);
+                }
+            }
+
+            _exportNavcat() {
+                if (!this._navmeshResult) {
+                    this._bakeNavMesh();
+                }
+
+                if (!this._navmeshResult) {
+                    this._setStatus('No navmesh to export');
+                    return;
+                }
+
+                const exporter = new NavmeshExporter(
+                    this.mapData,
+                    this.heightmapData,
+                    this.settings,
+                    this.geometry
+                );
+
+                // Export as JSON
+                const json = exporter.exportJSON(this._navmeshResult);
+                this._downloadFile(json, 'navmesh.navcat.json', 'application/json');
+
+                this._setStatus('NavMesh exported');
+            }
+
+            _exportMap() {
+                const data = {
+                    version: '3.0',
+                    settings: this.settings.toJSON(),
+                    outer: this.mapData.outerPoly || [],
+                    buildings: Array.from(this.mapData.buildings.values()).map(b => b.toJSON()),
+                    walls: Array.from(this.mapData.walls.values()).map(w => w.toJSON()),
+                    heightmap: this.heightmapData.toJSON()
+                };
+
+                const json = JSON.stringify(data, null, 2);
+                this._downloadFile(json, 'level.json', 'application/json');
+
+                this._setStatus('Map exported');
+            }
+
+            _importMap(file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+
+                        // Restore settings
+                        if (data.settings) {
+                            this.settings = MapSettings.fromJSON(data.settings);
+                            document.getElementById('map-width').value = this.settings.width;
+                            document.getElementById('map-height').value = this.settings.height;
+                            document.getElementById('max-height').value = this.settings.maxHeight;
+                        }
+
+                        // Restore heightmap
+                        if (data.heightmap) {
+                            this.heightmapData = HeightmapData.fromJSON(data.heightmap);
+                            if (this.heightmapEditor) {
+                                this.heightmapEditor.heightmap = this.heightmapData;
+                                this.heightmapEditor._bufferDirty = true;
+                                this.heightmapEditor.render();
+                            }
+                        }
+
+                        // Clear existing objects
+                        if (this.sceneManager) {
+                            this.sceneManager.clearObjects();
+                        }
+                        this.mapData = new MapData();
+
+                        // Restore outer
+                        if (data.outer) {
+                            this.mapData.outerPoly = data.outer;
+                        }
+
+                        // Restore buildings
+                        if (data.buildings) {
+                            for (const bData of data.buildings) {
+                                const building = Building.fromJSON(bData);
+                                this.mapData.addBuilding(building);
+
+                                if (this.sceneManager) {
+                                    const mesh = Building3D.createMesh(
+                                        building,
+                                        this.heightmapData,
+                                        this.settings,
+                                        this.sceneManager.materials.building
+                                    );
+                                    this.sceneManager.addBuildingMesh(building.id, mesh);
+                                }
+                            }
+                        }
+
+                        // Restore walls
+                        if (data.walls) {
+                            for (const wData of data.walls) {
+                                const wall = Wall.fromJSON(wData);
+                                this.mapData.addWall(wall);
+
+                                if (this.sceneManager) {
+                                    const mesh = Wall3D.createMeshFollowingTerrain(
+                                        wall,
+                                        this.heightmapData,
+                                        this.settings,
+                                        this.sceneManager.materials.wall
+                                    );
+                                    if (mesh) {
+                                        this.sceneManager.addWallMesh(wall.id, mesh);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Update 3D scene
+                        if (this.sceneManager) {
+                            this._updateTerrain();
+                            this.sceneManager.focusOnMap();
+                        }
+
+                        this._setStatus('Map imported');
+                    } catch (err) {
+                        console.error('Import error:', err);
+                        this._setStatus('Import failed: ' + err.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+
+            _downloadFile(content, filename, mimeType) {
+                const blob = new Blob([content], { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+
+            _onSettingsChanged() {
+                if (this.heightmapEditor) {
+                    this.heightmapEditor.mapSettings = this.settings;
+                    this.heightmapEditor.render();
+                }
+
+                if (this.sceneManager) {
+                    this._updateTerrain();
+                    this.sceneManager.focusOnMap();
+                }
+            }
+
+            _onResize() {
+                const container = document.getElementById('canvas-container');
+                const width = container.clientWidth;
+                const height = container.clientHeight;
+
+                // Resize heightmap canvas
+                const hmCanvas = document.getElementById('heightmap-canvas');
+                hmCanvas.width = width;
+                hmCanvas.height = height;
+
+                if (this.heightmapEditor) {
+                    this.heightmapEditor.resize(width, height);
+                    this.heightmapEditor.fitToView();
+                }
+
+                // Resize 3D view
+                if (this.sceneManager) {
+                    this.sceneManager.resize();
+                }
+            }
+
+            _setStatus(text) {
+                document.getElementById('status-bar').textContent = text;
+            }
+        }
+
+        // Initialize editor when DOM is ready
+        window.addEventListener('DOMContentLoaded', () => {
+            window.editor = new Editor3D();
+        });
+    </script>
+</body>
+</html>

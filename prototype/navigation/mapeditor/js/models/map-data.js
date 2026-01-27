@@ -2,6 +2,7 @@ import { Building } from './building.js';
 import { Wall } from './wall.js';
 import { Obstacle } from './obstacle.js';
 import { ConnectionManager } from './connection-manager.js';
+import { Geometry } from '../geometry.js';
 
 /**
  * MapData - container for all map data
@@ -43,12 +44,12 @@ export class MapData {
      */
     removeBuilding(buildingOrId) {
         const id = typeof buildingOrId === 'string' ? buildingOrId : buildingOrId.id;
-        const index = this.buildings.findIndex(b => b.id === id);
-        if (index !== -1) {
-            this.buildings.splice(index, 1);
-            return true;
+        const deleted = this.buildings.delete(id);
+        if (deleted) {
+            this._needsUpdate = true;
+            this.updateAllGeometry();
         }
-        return false;
+        return deleted;
     }
 
     /**
@@ -80,12 +81,12 @@ export class MapData {
      */
     removeWall(wallOrId) {
         const id = typeof wallOrId === 'string' ? wallOrId : wallOrId.id;
-        const index = this.walls.findIndex(w => w.id === id);
-        if (index !== -1) {
-            this.walls.splice(index, 1);
-            return true;
+        const deleted = this.walls.delete(id);
+        if (deleted) {
+            this._needsUpdate = true;
+            this.updateAllGeometry();
         }
-        return false;
+        return deleted;
     }
 
     /**
@@ -170,6 +171,39 @@ export class MapData {
     }
 
     /**
+  * Calcola i confini minimi e massimi della mappa basandosi sul perimetro esterno.
+  */
+    getBounds() {
+        if (!this.outerPoly || this.outerPoly.length === 0) {
+            return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+        }
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        for (const p of this.outerPoly) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+
+        // Aggiungiamo un piccolo margine (padding) per evitare problemi di clipping
+        // durante la rasterizzazione sui bordi esatti.
+        const padding = 10;
+        return {
+            minX: minX - padding,
+            minY: minY - padding,
+            maxX: maxX + padding,
+            maxY: maxY + padding,
+            width: (maxX - minX) + (padding * 2),
+            height: (maxY - minY) + (padding * 2)
+        };
+    }
+
+    /**
      * Remove object by ID (any type)
      */
     /**
@@ -216,7 +250,7 @@ export class MapData {
             x: p.x,
             y: p.y
         }));
-        for (let i=0;i<this.outerPoly.length; i++) {
+        for (let i = 0; i < this.outerPoly.length; i++) {
             this.outerPoly[i].edgeId = `e_${this.outerPoly[i].id}`;
         }
         this._needsUpdate = true;
@@ -527,6 +561,532 @@ export class MapData {
     _triggerChange() {
         this._needsUpdate = true; // Segnala che i dati sono sporchi
         if (this.onChanged) this.onChanged();
+    }
+
+    /**
+     * Genera il formato intermedio: un Outer e una lista di Holes.
+     * @param {boolean} preserveUnitVertices - Se true (default), conserva i vertici delle suddivisioni
+     *                                         delle mura per usarli come punti Steiner nella triangolazione.
+     */
+    getNavInputData(preserveUnitVertices = true) {
+        const rawHoles = [];
+
+        // 1. Identifica gruppi connessi (edifici + muri collegati)
+        const groups = this._identifyConnectedGroups();
+
+        // 2. Per ogni gruppo, costruisci il contorno appropriato
+        for (const group of groups) {
+            const contour = this._buildGroupContour(group, preserveUnitVertices);
+            if (contour && contour.length >= 3) {
+                rawHoles.push(contour);
+            }
+        }
+
+        // 3. Ostacoli (non hanno mai connessioni, sempre separati)
+        this.obstacles.forEach(o => {
+            const verts = o.getVertices();
+            if (verts.length >= 3) {
+                rawHoles.push(verts.map(v => ({ x: v.x, y: v.y })));
+            }
+        });
+
+        // 4. Semplifichiamo il poligono esterno
+        const simplifiedOuter = Geometry.simplifyPolygon(
+            this.outerPoly.map(p => ({ x: p.x, y: p.y }))
+        );
+
+        // 5. Semplifichiamo i contorni solo se NON preserviamo i vertici delle unit
+        const finalHoles = preserveUnitVertices
+            ? rawHoles
+            : rawHoles.map(hole => Geometry.simplifyPolygon(hole));
+
+        return {
+            metadata: {
+                generatedAt: Date.now(),
+                version: "1.0"
+            },
+            outer: simplifiedOuter,
+            holes: finalHoles
+        };
+    }
+
+    /**
+     * Identifica i gruppi di oggetti connessi (edifici + muri).
+     * Usa le connessioni per costruire un grafo e trova le componenti connesse.
+     */
+    _identifyConnectedGroups() {
+        const adjacency = new Map();
+        const allObjectIds = new Set();
+
+        // Aggiungi tutti gli oggetti al grafo
+        this.buildings.forEach((_, id) => {
+            allObjectIds.add(id);
+            adjacency.set(id, new Set());
+        });
+        this.walls.forEach((_, id) => {
+            allObjectIds.add(id);
+            adjacency.set(id, new Set());
+        });
+
+        // Aggiungi archi basati sulle connessioni
+        for (const conn of this.connections) {
+            const wallId = conn.wallId;
+            let targetId = conn.targetId || conn.targetWallId;
+
+            if (wallId && targetId && adjacency.has(wallId) && adjacency.has(targetId)) {
+                adjacency.get(wallId).add(targetId);
+                adjacency.get(targetId).add(wallId);
+            }
+        }
+
+        // Trova componenti connesse con DFS
+        const visited = new Set();
+        const groups = [];
+
+        for (const objId of allObjectIds) {
+            if (visited.has(objId)) continue;
+
+            const group = {
+                objectIds: new Set(),
+                buildings: [],
+                walls: [],
+                connections: []
+            };
+
+            const stack = [objId];
+            while (stack.length > 0) {
+                const current = stack.pop();
+                if (visited.has(current)) continue;
+                visited.add(current);
+                group.objectIds.add(current);
+
+                if (this.buildings.has(current)) {
+                    group.buildings.push(this.buildings.get(current));
+                } else if (this.walls.has(current)) {
+                    group.walls.push(this.walls.get(current));
+                }
+
+                for (const neighbor of adjacency.get(current)) {
+                    if (!visited.has(neighbor)) {
+                        stack.push(neighbor);
+                    }
+                }
+            }
+
+            // Raccogli le connessioni rilevanti per questo gruppo
+            for (const conn of this.connections) {
+                const wallId = conn.wallId;
+                const targetId = conn.targetId || conn.targetWallId;
+                if (group.objectIds.has(wallId) || group.objectIds.has(targetId)) {
+                    group.connections.push(conn);
+                }
+            }
+
+            groups.push(group);
+        }
+
+        return groups;
+    }
+
+    /**
+     * Costruisce il contorno di un gruppo connesso.
+     */
+    _buildGroupContour(group, preserveUnitVertices) {
+        // Caso: solo un muro senza connessioni
+        if (group.buildings.length === 0 && group.walls.length === 1 && group.connections.length === 0) {
+            const wall = group.walls[0];
+            return preserveUnitVertices ? wall.getOutlineDetailed() : wall.getOutline();
+        }
+
+        // Caso: solo un edificio senza connessioni
+        if (group.walls.length === 0 && group.buildings.length === 1 && group.connections.length === 0) {
+            return group.buildings[0].getVertices().map(v => ({ x: v.x, y: v.y }));
+        }
+
+        // Caso: catena di muri senza edifici
+        if (group.buildings.length === 0 && group.walls.length > 0) {
+            return this._buildWallChainContour(group, preserveUnitVertices);
+        }
+
+        // Caso: edifici con muri connessi
+        if (group.buildings.length > 0) {
+            return this._buildBuildingWithWallsContour(group, preserveUnitVertices);
+        }
+
+        return null;
+    }
+
+    /**
+     * Costruisce il contorno di una catena di muri (senza edifici).
+     */
+    _buildWallChainContour(group, preserveUnitVertices) {
+        if (group.walls.length === 1) {
+            const wall = group.walls[0];
+            return preserveUnitVertices ? wall.getOutlineDetailed() : wall.getOutline();
+        }
+
+        // Per catene di muri, dobbiamo seguire le connessioni WALL_TO_WALL_*
+        // Trova il muro di "partenza" (uno con un estremo libero)
+        const wallEndConnections = new Map(); // wallId -> { start: conn|null, end: conn|null }
+
+        for (const wall of group.walls) {
+            wallEndConnections.set(wall.id, { start: null, end: null });
+        }
+
+        for (const conn of group.connections) {
+            if (conn.type === 'WALL_TO_WALL_VERTEX' || conn.type === 'WALL_TO_WALL_EDGE') {
+                const entry = wallEndConnections.get(conn.wallId);
+                if (entry) {
+                    entry[conn.wallEnd] = conn;
+                }
+            }
+        }
+
+        // Trova un muro con almeno un estremo libero
+        let startWall = null;
+        let startFromEnd = 'start'; // da quale estremo iniziare
+
+        for (const wall of group.walls) {
+            const ends = wallEndConnections.get(wall.id);
+            if (!ends.start) {
+                startWall = wall;
+                startFromEnd = 'start';
+                break;
+            }
+            if (!ends.end) {
+                startWall = wall;
+                startFromEnd = 'end';
+                break;
+            }
+        }
+
+        if (!startWall) {
+            // Tutti i muri sono connessi ad entrambi gli estremi (loop chiuso)
+            // Prendi il primo muro come partenza
+            startWall = group.walls[0];
+            startFromEnd = 'start';
+        }
+
+        // Costruisci il contorno seguendo la catena
+        return this._walkWallChain(startWall, startFromEnd, group, wallEndConnections, preserveUnitVertices);
+    }
+
+    /**
+     * Percorre una catena di muri costruendo il contorno.
+     */
+    _walkWallChain(startWall, startFromEnd, group, wallEndConnections, preserveUnitVertices) {
+        const contour = [];
+        const visitedWalls = new Set();
+        const leftSidePoints = [];
+        const rightSidePoints = [];
+
+        let currentWall = startWall;
+        let enteringFrom = startFromEnd; // da quale lato stiamo "entrando" nel muro
+
+        while (currentWall && !visitedWalls.has(currentWall.id)) {
+            visitedWalls.add(currentWall.id);
+
+            // Ottieni i punti del contorno del muro
+            const wallContour = preserveUnitVertices
+                ? currentWall.getOutlineDetailed()
+                : currentWall.getOutline();
+
+            // Il contorno del muro è: lato sinistro in avanti, poi lato destro all'indietro
+            const numPoints = wallContour.length;
+            const halfPoints = numPoints / 2;
+
+            let leftPoints, rightPoints;
+            if (enteringFrom === 'start') {
+                // Entriamo dall'inizio: lato sinistro va da 0 a halfPoints
+                leftPoints = wallContour.slice(0, halfPoints);
+                rightPoints = wallContour.slice(halfPoints).reverse();
+            } else {
+                // Entriamo dalla fine: invertiamo tutto
+                leftPoints = wallContour.slice(halfPoints).reverse();
+                rightPoints = wallContour.slice(0, halfPoints);
+            }
+
+            leftSidePoints.push(...leftPoints);
+            rightSidePoints.push(...rightPoints);
+
+            // Trova la connessione all'altro estremo
+            const exitEnd = enteringFrom === 'start' ? 'end' : 'start';
+            const conn = wallEndConnections.get(currentWall.id)?.[exitEnd];
+
+            if (conn && (conn.type === 'WALL_TO_WALL_VERTEX' || conn.type === 'WALL_TO_WALL_EDGE')) {
+                // Passa al muro connesso
+                const nextWallId = conn.targetWallId || conn.targetId;
+                const nextWall = this.walls.get(nextWallId);
+
+                if (nextWall && !visitedWalls.has(nextWall.id)) {
+                    // Determina da quale lato entriamo nel prossimo muro
+                    const nextEnteringFrom = conn.targetWallEnd || 'start';
+                    currentWall = nextWall;
+                    enteringFrom = nextEnteringFrom;
+                } else {
+                    currentWall = null;
+                }
+            } else {
+                currentWall = null;
+            }
+        }
+
+        // Combina: lato sinistro in avanti, poi lato destro all'indietro
+        contour.push(...leftSidePoints);
+        contour.push(...rightSidePoints.reverse());
+
+        return contour;
+    }
+
+    /**
+     * Costruisce il contorno di edifici con muri connessi.
+     */
+    _buildBuildingWithWallsContour(group, preserveUnitVertices) {
+        // Mappa delle connessioni per vertice bevel
+        const bevelToWall = new Map(); // "buildingId:vertexId" -> { wall, wallEnd, conn }
+
+        for (const conn of group.connections) {
+            if (conn.type === 'WALL_TO_BUILDING_VERTEX') {
+                const wall = this.walls.get(conn.wallId);
+                if (wall) {
+                    // Il vertice originale è stato diviso in _bevel_L e _bevel_R
+                    const bevelLKey = `${conn.targetId}:${conn.targetVertexId}_bevel_L`;
+                    bevelToWall.set(bevelLKey, {
+                        wall,
+                        wallEnd: conn.wallEnd,
+                        conn
+                    });
+                }
+            }
+        }
+
+        // Mappa dei muri e delle loro connessioni agli estremi
+        const wallConnections = new Map(); // wallId -> { start: { type, target }, end: { type, target } }
+
+        for (const wall of group.walls) {
+            wallConnections.set(wall.id, { start: null, end: null });
+        }
+
+        for (const conn of group.connections) {
+            const entry = wallConnections.get(conn.wallId);
+            if (!entry) continue;
+
+            if (conn.type === 'WALL_TO_BUILDING_VERTEX') {
+                entry[conn.wallEnd] = {
+                    type: 'building_vertex',
+                    buildingId: conn.targetId,
+                    vertexId: conn.targetVertexId
+                };
+            } else if (conn.type === 'WALL_TO_EDGE') {
+                entry[conn.wallEnd] = {
+                    type: 'edge',
+                    targetType: conn.targetType,
+                    targetId: conn.targetId
+                };
+            } else if (conn.type === 'WALL_TO_WALL_VERTEX' || conn.type === 'WALL_TO_WALL_EDGE') {
+                entry[conn.wallEnd] = {
+                    type: 'wall',
+                    targetWallId: conn.targetWallId || conn.targetId,
+                    targetWallEnd: conn.targetWallEnd
+                };
+            }
+        }
+
+        // Partiamo dal primo edificio e costruiamo il contorno
+        const building = group.buildings[0];
+        const vertices = building.getVertices();
+        const contour = [];
+
+        let i = 0;
+        const startI = 0;
+        const maxIterations = vertices.length * 10 + group.walls.length * 100;
+        let iterations = 0;
+
+        while (iterations < maxIterations) {
+            iterations++;
+            const v = vertices[i];
+            const nextI = (i + 1) % vertices.length;
+
+            // Controlla se questo è un vertice bevel_L (inizio di una connessione a muro)
+            const bevelKey = `${building.id}:${v.id}`;
+            const wallInfo = bevelToWall.get(bevelKey);
+
+            if (wallInfo && v.id.endsWith('_bevel_L')) {
+                // Aggiungi il vertice corrente (bevel_L)
+                contour.push({ x: v.x, y: v.y });
+
+                // Segui il muro e aggiungi i suoi vertici
+                const wallContourPoints = this._getWallContourBetweenConnections(
+                    wallInfo.wall,
+                    wallInfo.wallEnd,
+                    wallConnections,
+                    group,
+                    preserveUnitVertices,
+                    new Set()
+                );
+
+                contour.push(...wallContourPoints);
+
+                // Salta al vertice dopo bevel_R (il prossimo vertice non-bevel)
+                // Il vertice successivo a bevel_L è bevel_R, quindi saltiamo entrambi
+                i = (nextI + 1) % vertices.length;
+
+                // Se siamo tornati all'inizio, abbiamo finito
+                if (i === startI) break;
+            } else {
+                contour.push({ x: v.x, y: v.y });
+                i = nextI;
+                if (i === startI) break;
+            }
+        }
+
+        return contour;
+    }
+
+    /**
+     * Ottiene i punti del contorno di un muro tra le sue connessioni.
+     *
+     * Il contorno del muro da getOutlineDetailed() è strutturato così:
+     * [L0, L1, ..., L_n, R_n, R_{n-1}, ..., R_0]
+     * Dove:
+     *   - L0 = punto sinistro all'inizio (start) del muro
+     *   - L_n = punto sinistro alla fine (end) del muro
+     *   - R_n = punto destro alla fine (end) del muro
+     *   - R_0 = punto destro all'inizio (start) del muro
+     *
+     * Se il muro è connesso a un edificio, L0/R0 coincidono con i bevel dell'edificio.
+     */
+    _getWallContourBetweenConnections(wall, enteringEnd, wallConnections, group, preserveUnitVertices, visitedWalls) {
+        if (visitedWalls.has(wall.id)) return [];
+        visitedWalls.add(wall.id);
+
+        const wallContour = preserveUnitVertices
+            ? wall.getOutlineDetailed()
+            : wall.getOutline();
+
+        const n = wallContour.length;
+        const half = Math.floor(n / 2);
+
+        // Separa i due lati per chiarezza
+        // leftSide:  [L0, L1, L2, ..., L_{half-1}]  (indices 0 to half-1)
+        // rightSide: [R_{half-1}, R_{half-2}, ..., R_0]  (indices half to n-1)
+        const leftSide = wallContour.slice(0, half);
+        const rightSide = wallContour.slice(half);
+
+        const exitEnd = enteringEnd === 'start' ? 'end' : 'start';
+        const exitConn = wallConnections.get(wall.id)?.[exitEnd];
+
+        const points = [];
+
+        if (enteringEnd === 'start') {
+            // Entriamo da L0 (bevel_L, già aggiunto dall'edificio)
+            // Percorriamo il lato sinistro: L1, L2, ..., L_{half-2}
+            // (escludiamo L0 già aggiunto e L_{half-1} che è la punta o bevel dell'altro oggetto)
+            for (let i = 1; i < half - 1; i++) {
+                points.push({ x: leftSide[i].x, y: leftSide[i].y });
+            }
+
+            if (!exitConn) {
+                // Estremo libero: aggiungi la punta e torna sul lato destro
+                points.push({ x: leftSide[half - 1].x, y: leftSide[half - 1].y }); // L_{half-1} (punta L)
+                points.push({ x: rightSide[0].x, y: rightSide[0].y });             // R_{half-1} (punta R)
+
+                // Lato destro: R_{half-2}, R_{half-3}, ..., R_1 (escludiamo R_0 che è bevel_R)
+                for (let i = 1; i < half - 1; i++) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            } else if (exitConn.type === 'wall') {
+                // Connesso a un altro muro: aggiungi la giunzione e segui la catena
+                points.push({ x: leftSide[half - 1].x, y: leftSide[half - 1].y }); // L_{half-1}
+
+                const nextWall = this.walls.get(exitConn.targetWallId);
+                if (nextWall && !visitedWalls.has(nextWall.id)) {
+                    const nextPoints = this._getWallContourBetweenConnections(
+                        nextWall,
+                        exitConn.targetWallEnd,
+                        wallConnections,
+                        group,
+                        preserveUnitVertices,
+                        visitedWalls
+                    );
+                    points.push(...nextPoints);
+                }
+
+                // Torna sul lato destro (escludendo R_{half-1} che è alla giunzione e R_0 che è bevel_R)
+                points.push({ x: rightSide[0].x, y: rightSide[0].y }); // R_{half-1}
+                for (let i = 1; i < half - 1; i++) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            } else if (exitConn.type === 'building_vertex') {
+                // Connesso a un altro vertice dello stesso o altro edificio
+                // L_{half-1} e R_{half-1} sono i bevel dell'altro vertice
+                // Non li aggiungiamo, il contorno dell'edificio gestirà il passaggio
+                // Ma dobbiamo comunque tornare sul lato destro!
+
+                // Lato destro: R_{half-2}, ..., R_1 (escludiamo R_{half-1} bevel e R_0 bevel)
+                for (let i = 1; i < half - 1; i++) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            } else if (exitConn.type === 'edge') {
+                // Connesso a un edge: il muro termina sull'edge
+                // Aggiungi la punta e torna
+                points.push({ x: leftSide[half - 1].x, y: leftSide[half - 1].y });
+                points.push({ x: rightSide[0].x, y: rightSide[0].y });
+                for (let i = 1; i < half - 1; i++) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            }
+        } else {
+            // enteringEnd === 'end'
+            // Entriamo da L_{half-1} (bevel_L alla fine, già aggiunto)
+            // Percorriamo il lato sinistro all'indietro: L_{half-2}, L_{half-3}, ..., L_1
+            for (let i = half - 2; i > 0; i--) {
+                points.push({ x: leftSide[i].x, y: leftSide[i].y });
+            }
+
+            if (!exitConn) {
+                // Estremo libero (start): aggiungi la punta e torna sul lato destro
+                points.push({ x: leftSide[0].x, y: leftSide[0].y });               // L_0 (punta L)
+                points.push({ x: rightSide[half - 1].x, y: rightSide[half - 1].y }); // R_0 (punta R)
+
+                // Lato destro: R_1, R_2, ..., R_{half-2}
+                for (let i = half - 2; i > 0; i--) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            } else if (exitConn.type === 'wall') {
+                points.push({ x: leftSide[0].x, y: leftSide[0].y }); // L_0
+
+                const nextWall = this.walls.get(exitConn.targetWallId);
+                if (nextWall && !visitedWalls.has(nextWall.id)) {
+                    const nextPoints = this._getWallContourBetweenConnections(
+                        nextWall,
+                        exitConn.targetWallEnd,
+                        wallConnections,
+                        group,
+                        preserveUnitVertices,
+                        visitedWalls
+                    );
+                    points.push(...nextPoints);
+                }
+
+                points.push({ x: rightSide[half - 1].x, y: rightSide[half - 1].y }); // R_0
+                for (let i = half - 2; i > 0; i--) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            } else if (exitConn.type === 'building_vertex') {
+                for (let i = half - 2; i > 0; i--) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            } else if (exitConn.type === 'edge') {
+                points.push({ x: leftSide[0].x, y: leftSide[0].y });
+                points.push({ x: rightSide[half - 1].x, y: rightSide[half - 1].y });
+                for (let i = half - 2; i > 0; i--) {
+                    points.push({ x: rightSide[i].x, y: rightSide[i].y });
+                }
+            }
+        }
+
+        return points;
     }
 
 }

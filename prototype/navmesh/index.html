@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test NavMesh Generator</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: sans-serif;
+            background-color: #333;
+            color: white;
+        }
+        canvas {
+            background-color: #eee; /* Colore di sfondo della mappa */
+            border: 2px solid #000;
+            margin-top: 20px;
+        }
+        .info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Debug NavMesh</h1>
+    <canvas id="debugCanvas" width="1600" height="1200"></canvas>
+    <div class="info">Rosso = Ostacoli | Verde = NavMesh (Poligoni calpestabili)</div>
+    <script src="./NavMeshGenerator.js"></script>
+    <script type="module">
+        // Importiamo la libreria (assicurati che il file si chiami esattamente così)
+        // Se l'import fallisce, prova a rimuovere le graffe: import NavMeshGenerator from ...
+        // import NavMeshGenerator from './NavMeshGenerator.js';
+
+       if (typeof NavMeshGenerator === 'undefined') {
+            console.error("ERRORE: NavMeshGenerator non trovato. Controlla il nome del file.");
+        } else {
+            console.log("NavMeshGenerator caricato correttamente!");
+        }
+
+        // --- 1. CONFIGURAZIONE (Il tuo codice) ---
+        const areaLeftBound = 192;
+        const areaTopBound = 64;
+        const areaRightBound = 1408;
+        const areaBottomBound = 704;
+        const rasterizationCellSize = 5; // Più piccolo è, più precisa (e lenta) è la mesh
+
+        console.log("Inizializzazione NavMeshGenerator...");
+        
+        const navMeshGenerator = new NavMeshGenerator(
+            areaLeftBound,
+            areaTopBound,
+            areaRightBound,
+            areaBottomBound,
+            rasterizationCellSize
+        );
+
+        // Definiamo gli ostacoli (il quadrato centrale)
+        const obstacles = [
+    [
+      {
+        "x": 1315.355,
+        "y": 643.355
+      },
+      {
+        "x": 1244.645,
+        "y": 643.355
+      },
+      {
+        "x": 1244.645,
+        "y": 572.645
+      },
+      {
+        "x": 1315.355,
+        "y": 572.645
+      }
+    ],
+    [
+      {
+        "x": 323.355,
+        "y": 643.355
+      },
+      {
+        "x": 252.645,
+        "y": 643.355
+      },
+      {
+        "x": 252.645,
+        "y": 572.645
+      },
+      {
+        "x": 323.355,
+        "y": 572.645
+      }
+    ],
+    [
+      {
+        "x": 1315.355,
+        "y": 124.645
+      },
+      {
+        "x": 1315.355,
+        "y": 195.355
+      },
+      {
+        "x": 1244.645,
+        "y": 195.355
+      },
+      {
+        "x": 1244.645,
+        "y": 180.402
+      },
+      {
+        "x": 835.355,
+        "y": 634.402
+      },
+      {
+        "x": 835.355,
+        "y": 643.355
+      },
+      {
+        "x": 764.645,
+        "y": 643.355
+      },
+      {
+        "x": 764.645,
+        "y": 640.484
+      },
+      {
+        "x": 355.355,
+        "y": 183.484
+      },
+      {
+        "x": 355.355,
+        "y": 195.355
+      },
+      {
+        "x": 284.645,
+        "y": 195.355
+      },
+      {
+        "x": 284.645,
+        "y": 124.645
+      },
+      {
+        "x": 355.355,
+        "y": 124.645
+      },
+      {
+        "x": 355.355,
+        "y": 138.516
+      },
+      {
+        "x": 543.522,
+        "y": 348.618
+      },
+      {
+        "x": 764.645,
+        "y": 140.396
+      },
+      {
+        "x": 764.645,
+        "y": 124.645
+      },
+      {
+        "x": 835.355,
+        "y": 124.645
+      },
+      {
+        "x": 835.355,
+        "y": 195.355
+      },
+      {
+        "x": 764.645,
+        "y": 195.355
+      },
+      {
+        "x": 764.645,
+        "y": 181.604
+      },
+      {
+        "x": 563.543,
+        "y": 370.972
+      },
+      {
+        "x": 764.645,
+        "y": 595.516
+      },
+      {
+        "x": 764.645,
+        "y": 572.645
+      },
+      {
+        "x": 835.355,
+        "y": 572.645
+      },
+      {
+        "x": 835.355,
+        "y": 589.598
+      },
+      {
+        "x": 1244.645,
+        "y": 135.598
+      },
+      {
+        "x": 1244.645,
+        "y": 124.645
+      }
+    ],
+    [
+      {
+        "x": 825,
+        "y": 340.699
+      },
+      {
+        "x": 843.301,
+        "y": 359
+      },
+      {
+        "x": 850,
+        "y": 384
+      },
+      {
+        "x": 843.301,
+        "y": 409
+      },
+      {
+        "x": 825,
+        "y": 427.301
+      },
+      {
+        "x": 800,
+        "y": 434
+      },
+      {
+        "x": 775,
+        "y": 427.301
+      },
+      {
+        "x": 756.699,
+        "y": 409
+      },
+      {
+        "x": 750,
+        "y": 384
+      },
+      {
+        "x": 756.699,
+        "y": 359
+      },
+      {
+        "x": 775,
+        "y": 340.699
+      },
+      {
+        "x": 800,
+        "y": 334
+      }
+    ]
+  ];
+
+        const obstacleCellPadding = 3; // Ho messo 2 per vedere un po' di margine attorno all'ostacolo
+
+        console.log("Generazione NavMesh in corso...");
+        const startTime = performance.now();
+        
+        // --- 2. GENERAZIONE ---
+        const navMeshPolygons = navMeshGenerator.buildNavMesh(
+            obstacles,
+            obstacleCellPadding
+        );
+        
+        const endTime = performance.now();
+        console.log(`NavMesh generata in ${(endTime - startTime).toFixed(2)}ms`);
+        console.log("Poligoni generati:", navMeshPolygons);
+
+        // --- 3. VISUALIZZAZIONE (Rendering su Canvas) ---
+        const canvas = document.getElementById('debugCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Funzione helper per disegnare poligoni
+        function drawPolygon(points, color, strokeColor) {
+            if (points.length < 3) return;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.fill();
+            if (strokeColor) {
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        }
+
+        // A. Disegniamo la NavMesh (le aree verdi dove si può camminare)
+        // navMeshPolygons è un array di poligoni, dove ogni poligono è un array di punti {x,y}
+        navMeshPolygons.forEach(polygon => {
+            // Verde semi-trasparente con bordo verde scuro
+            drawPolygon(polygon, 'rgba(0, 255, 0, 0.4)', 'rgba(0, 100, 0, 0.8)');
+        });
+
+        // B. Disegniamo gli ostacoli (Rossi)
+        obstacles.forEach(obstacle => {
+            drawPolygon(obstacle, 'rgba(255, 0, 0, 0.6)', 'black');
+        });
+
+    </script>
+</body>
+</html>
