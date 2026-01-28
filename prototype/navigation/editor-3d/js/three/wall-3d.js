@@ -86,35 +86,38 @@ export class Wall3D {
     /**
      * Create wall mesh with per-segment height sampling
      * This creates a more accurate wall that follows the terrain
+     * @param {number} subdivisionDistance - Distance between subdivision points (default 4 meters)
      */
-    static createMeshFollowingTerrain(wall, heightmap, settings, material, wallType = 'stone') {
+    static createMeshFollowingTerrain(wall, heightmap, settings, material, wallType = 'stone', subdivisionDistance = 4) {
         const wallHeight = this.getHeight(wallType);
         const points = wall.points;
         const thickness = wall.thickness || 2;
 
         if (points.length < 2) return null;
 
+        // First, subdivide the wall points to follow terrain
+        const subdividedPoints = this._subdivideWallPoints(points, heightmap, settings, subdivisionDistance);
+
         // Build wall geometry segment by segment
         const vertices = [];
         const indices = [];
         let vertexOffset = 0;
 
-        for (let i = 0; i < points.length - 1; i++) {
-            const p1 = points[i];
-            const p2 = points[i + 1];
+        for (let i = 0; i < subdividedPoints.length - 1; i++) {
+            const p1 = subdividedPoints[i];
+            const p2 = subdividedPoints[i + 1];
 
-            // Sample terrain heights at endpoints
-            const h1 = heightmap ?
-                heightmap.sampleWorld(p1.x, p1.y, settings.width, settings.height) * settings.maxHeight :
-                0;
-            const h2 = heightmap ?
-                heightmap.sampleWorld(p2.x, p2.y, settings.width, settings.height) * settings.maxHeight :
-                0;
+            // Heights are already computed in subdivided points
+            const h1 = p1.h;
+            const h2 = p2.h;
 
             // Calculate perpendicular direction
             const dx = p2.x - p1.x;
             const dy = p2.y - p1.y;
             const len = Math.sqrt(dx * dx + dy * dy);
+
+            if (len < 0.001) continue; // Skip degenerate segments
+
             const nx = -dy / len * thickness / 2;
             const ny = dx / len * thickness / 2;
 
@@ -163,13 +166,15 @@ export class Wall3D {
             }
 
             // End cap
-            if (i === points.length - 2) {
+            if (i === subdividedPoints.length - 2) {
                 indices.push(o + 2, o + 3, o + 7);
                 indices.push(o + 2, o + 7, o + 6);
             }
 
             vertexOffset += 8;
         }
+
+        if (vertices.length === 0) return null;
 
         // Create buffer geometry
         const geometry = new THREE.BufferGeometry();
@@ -178,6 +183,55 @@ export class Wall3D {
         geometry.computeVertexNormals();
 
         return new THREE.Mesh(geometry, material);
+    }
+
+    /**
+     * Subdivide wall points to follow terrain
+     * Inserts intermediate points between each pair of original points
+     */
+    static _subdivideWallPoints(points, heightmap, settings, maxDistance) {
+        const result = [];
+
+        for (let i = 0; i < points.length; i++) {
+            const p1 = points[i];
+
+            // Sample height for this point
+            const h1 = heightmap ?
+                heightmap.sampleWorld(p1.x, p1.y, settings.width, settings.height) * settings.maxHeight :
+                0;
+
+            // Add original point with height
+            result.push({ x: p1.x, y: p1.y, h: h1, isOriginal: true, originalIndex: i });
+
+            // If not the last point, add intermediate points
+            if (i < points.length - 1) {
+                const p2 = points[i + 1];
+
+                // Calculate segment length
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const segmentLength = Math.sqrt(dx * dx + dy * dy);
+
+                // Determine how many subdivisions we need
+                const numSubdivisions = Math.max(1, Math.ceil(segmentLength / maxDistance));
+
+                // Add intermediate points
+                for (let j = 1; j < numSubdivisions; j++) {
+                    const t = j / numSubdivisions;
+                    const ix = p1.x + dx * t;
+                    const iy = p1.y + dy * t;
+
+                    // Sample terrain height at intermediate point
+                    const ih = heightmap ?
+                        heightmap.sampleWorld(ix, iy, settings.width, settings.height) * settings.maxHeight :
+                        0;
+
+                    result.push({ x: ix, y: iy, h: ih, isOriginal: false });
+                }
+            }
+        }
+
+        return result;
     }
 
     /**

@@ -137,16 +137,19 @@ export class Wall {
             id: this.id,
             label: this.label,
             points: this.points.map(p => ({ x: p.x, y: p.y, id: p.id })),
-            thickness: this.thickness
+            thickness: this.thickness,
+            subdivisionDistance: this.subdivisionDistance || 4
         };
     }
 
     static fromJSON(json) {
-        return new Wall({
+        const wall = new Wall({
             id: json.id,
             label: json.label,
             points: json.points,
             thickness: json.thickness
         });
+        wall.subdivisionDistance = json.subdivisionDistance || 4;
+        return wall;
     }
 }

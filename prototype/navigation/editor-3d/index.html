@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Map Editor - NavCat</title>
+    <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Left Toolbar -->
+        <aside id="toolbar">
+            <div class="toolbar-section">
+                <h3>Mode</h3>
+                <div class="tab-bar" id="mode-tabs">
+                    <button class="tab-btn active" data-tab="heightmap">Heightmap</button>
+                    <button class="tab-btn" data-tab="3d">3D View</button>
+                </div>
+            </div>
+
+            <!-- Heightmap Tools (shown when heightmap tab is active) -->
+            <div id="heightmap-tools" class="toolbar-section">
+                <h3>Brush Tools</h3>
+                <button class="tool-btn active" data-tool="raise" title="Raise Terrain">
+                    <span class="icon">&#9650;</span>
+                    <span class="label">Raise</span>
+                </button>
+                <button class="tool-btn" data-tool="lower" title="Lower Terrain">
+                    <span class="icon">&#9660;</span>
+                    <span class="label">Lower</span>
+                </button>
+                <button class="tool-btn" data-tool="smooth" title="Smooth Terrain">
+                    <span class="icon">&#8764;</span>
+                    <span class="label">Smooth</span>
+                </button>
+                <button class="tool-btn" data-tool="flatten" title="Flatten Terrain">
+                    <span class="icon">&#9644;</span>
+                    <span class="label">Flatten</span>
+                </button>
+                <button class="tool-btn" data-tool="noise" title="Add Noise">
+                    <span class="icon">&#9776;</span>
+                    <span class="label">Noise</span>
+                </button>
+            </div>
+
+            <div id="heightmap-tools-brush" class="toolbar-section">
+                <h3>Brush Settings</h3>
+                <label class="slider-label">
+                    Radius: <span id="brush-radius-val">32</span>
+                    <input type="range" id="brush-radius" min="5" max="100" value="32">
+                </label>
+                <label class="slider-label">
+                    Strength: <span id="brush-strength-val">0.10</span>
+                    <input type="range" id="brush-strength" min="1" max="100" value="10">
+                </label>
+                <label class="slider-label">
+                    Falloff: <span id="brush-falloff-val">0.50</span>
+                    <input type="range" id="brush-falloff" min="0" max="100" value="50">
+                </label>
+            </div>
+
+            <!-- 3D View Tools (shown when 3d tab is active) -->
+            <div id="view-tools" class="toolbar-section hidden">
+                <h3>Objects</h3>
+                <button class="tool-btn" data-tool="select" title="Select (V)">
+                    <span class="icon">&#9654;</span>
+                    <span class="label">Select</span>
+                </button>
+                <button class="tool-btn" data-tool="building" title="Add Building (B)">
+                    <span class="icon">&#9632;</span>
+                    <span class="label">Building</span>
+                </button>
+                <button class="tool-btn" data-tool="wall" title="Add Wall (W)">
+                    <span class="icon">&#9473;</span>
+                    <span class="label">Wall</span>
+                </button>
+            </div>
+
+            <div id="building-selector" class="toolbar-section hidden">
+                <h3>Building Type</h3>
+                <select id="building-type">
+                    <option value="SMALL_HOUSE">Small House</option>
+                    <option value="HOUSE" selected>House</option>
+                    <option value="LARGE_HOUSE">Large House</option>
+                    <option value="BARRACKS">Barracks</option>
+                    <option value="TOWER">Tower</option>
+                    <option value="MAGIC_TOWER">Magic Tower</option>
+                    <option value="CASTLE">Castle</option>
+                    <option value="KEEP">Keep</option>
+                    <option value="GATEHOUSE">Gatehouse</option>
+                    <option value="WALL_TOWER">Wall Tower</option>
+                    <option value="ngon_4">Square</option>
+                    <option value="ngon_6">Hexagon</option>
+                    <option value="ngon_8">Octagon</option>
+                    <option value="ngon_12">Dodecagon</option>
+                </select>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>Map Settings</h3>
+                <label class="input-label">
+                    Width (m):
+                    <input type="number" id="map-width" min="64" max="2048" step="64" value="256">
+                </label>
+                <label class="input-label">
+                    Height (m):
+                    <input type="number" id="map-height" min="64" max="2048" step="64" value="256">
+                </label>
+                <label class="input-label">
+                    Max Height:
+                    <input type="number" id="max-height" min="10" max="200" value="50">
+                </label>
+                <label class="input-label">
+                    Resolution:
+                    <select id="heightmap-res">
+                        <option value="64">64x64</option>
+                        <option value="128" selected>128x128</option>
+                        <option value="256">256x256</option>
+                        <option value="512">512x512</option>
+                    </select>
+                </label>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>Terrain Actions</h3>
+                <button id="btn-generate" class="action-btn">Generate Terrain</button>
+                <button id="btn-smooth-global" class="action-btn">Smooth All</button>
+                <button id="btn-clear-terrain" class="action-btn">Clear Terrain</button>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>View Options</h3>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-wireframe">
+                    Show Wireframe
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-grid" checked>
+                    Show Grid
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="chk-navmesh">
+                    Show NavMesh
+                </label>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>NavMesh</h3>
+                <button id="btn-bake-navmesh" class="action-btn primary">Bake NavMesh</button>
+                <button id="btn-clear-navmesh" class="action-btn">Clear NavMesh</button>
+                <button id="btn-export-navmesh" class="action-btn">Export NavMesh</button>
+            </div>
+
+            <div class="toolbar-section">
+                <h3>File</h3>
+                <label class="action-btn file-btn">
+                    Load Map
+                    <input type="file" id="btn-load" accept=".json,.png" hidden>
+                </label>
+                <button id="btn-save" class="action-btn">Save Map</button>
+                <button id="btn-export-heightmap" class="action-btn">Export Heightmap</button>
+                <label class="action-btn file-btn">
+                    Import Heightmap
+                    <input type="file" id="btn-import-heightmap" accept=".png,.jpg,.jpeg" hidden>
+                </label>
+            </div>
+        </aside>
+
+        <!-- Main View Area -->
+        <main id="view-area">
+            <!-- Heightmap 2D Editor Canvas -->
+            <div id="heightmap-container" class="view-container active">
+                <canvas id="heightmap-canvas"></canvas>
+            </div>
+
+            <!-- 3D View Container -->
+            <div id="three-container" class="view-container">
+            </div>
+
+            <!-- Status Bar -->
+            <div id="status-bar">
+                <span id="status-text">Heightmap Editor - Click and drag to paint</span>
+                <span id="coords-indicator">X: 0 Z: 0</span>
+                <button id="btn-reset-view" class="small-btn">Reset View</button>
+            </div>
+        </main>
+
+        <!-- Right Properties Panel -->
+        <aside id="properties-panel" class="hidden">
+            <h3>Properties</h3>
+            <div id="properties-content">
+                <p>Select an object to view its properties</p>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Import map dialog -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
