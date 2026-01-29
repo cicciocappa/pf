@@ -88,7 +88,19 @@ const AgentTargetState = {
     NONE: 0,
     FAILED: 1,
     VALID: 2,
-    REQUESTING: 3
+    REQUESTING: 3,
+    WAITING_FOR_QUEUE: 4,
+    WAITING_FOR_PATH: 5,
+    VELOCITY: 6
+};
+
+// Flag per controllare il comportamento degli agenti (come navcat CrowdUpdateFlags)
+const CrowdUpdateFlags = {
+    ANTICIPATE_TURNS: 1,      // Steering morbido con anticipazione curve
+    OBSTACLE_AVOIDANCE: 2,    // Evita ostacoli con velocity sampling
+    SEPARATION: 4,            // Separazione da altri agenti
+    OPTIMIZE_VIS: 8,          // Ottimizzazione visibilità del path
+    OPTIMIZE_TOPO: 16         // Ottimizzazione topologica del path
 };
 
 // ----------------------------------------------------------------------------
@@ -102,6 +114,7 @@ class NavMesh {
     }
 
     loadFromJSON(json) {
+        console.log("loading...");
         this.vertices = json.vertices.map(v => vec3.create(v[0], v[1], v[2]));
 
         this.polygons = json.polygons.map((polyData, index) => {
@@ -115,6 +128,7 @@ class NavMesh {
 
         this.computeBounds();
         this.buildAdjacency();
+        console.log("done");
     }
 
     computeBounds() {
@@ -344,6 +358,60 @@ class Polygon {
 }
 
 // ----------------------------------------------------------------------------
+// QUERY FILTER - Filtro per poligoni accessibili (come navcat QueryFilter)
+// ----------------------------------------------------------------------------
+class QueryFilter {
+    constructor() {
+        // Set di indici di poligoni bloccati
+        this.blockedPolygons = new Set();
+        // Costi personalizzati per poligono (opzionale)
+        this.polygonCosts = new Map();
+        // Costo di default
+        this.defaultCost = 1.0;
+    }
+
+    // Verifica se un poligono è attraversabile
+    passFilter(polyIndex, navMesh) {
+        return !this.blockedPolygons.has(polyIndex);
+    }
+
+    // Ottiene il costo di attraversamento di un poligono
+    getCost(polyIndex) {
+        return this.polygonCosts.get(polyIndex) ?? this.defaultCost;
+    }
+
+    // Blocca un poligono
+    blockPolygon(polyIndex) {
+        this.blockedPolygons.add(polyIndex);
+    }
+
+    // Sblocca un poligono
+    unblockPolygon(polyIndex) {
+        this.blockedPolygons.delete(polyIndex);
+    }
+
+    // Verifica se un poligono è bloccato
+    isBlocked(polyIndex) {
+        return this.blockedPolygons.has(polyIndex);
+    }
+
+    // Imposta il costo di un poligono (per pathfinding con costi variabili)
+    setPolygonCost(polyIndex, cost) {
+        this.polygonCosts.set(polyIndex, cost);
+    }
+
+    // Resetta tutti i blocchi
+    clearAllBlocks() {
+        this.blockedPolygons.clear();
+    }
+
+    // Resetta tutti i costi
+    clearAllCosts() {
+        this.polygonCosts.clear();
+    }
+}
+
+// ----------------------------------------------------------------------------
 // PATHFINDING - A* e Path Corridor
 // ----------------------------------------------------------------------------
 class PathFinder {
@@ -352,9 +420,15 @@ class PathFinder {
     }
 
     // A* per trovare il percorso tra due poligoni
-    findPath(startPoly, endPoly) {
+    findPath(startPoly, endPoly, filter = null) {
         if (!startPoly || !endPoly) return null;
         if (startPoly.index === endPoly.index) return [startPoly.index];
+
+        // Verifica che start e end non siano bloccati
+        if (filter) {
+            if (!filter.passFilter(startPoly.index, this.navMesh)) return null;
+            if (!filter.passFilter(endPoly.index, this.navMesh)) return null;
+        }
 
         const openSet = new Map();
         const closedSet = new Set();
@@ -389,9 +463,14 @@ class PathFinder {
             for (const neighborIdx of currentPoly.neighbors) {
                 if (closedSet.has(neighborIdx)) continue;
 
+                // Filtra poligoni bloccati
+                if (filter && !filter.passFilter(neighborIdx, this.navMesh)) continue;
+
                 const neighbor = this.navMesh.polygons[neighborIdx];
-                const tentativeG = gScore.get(current) +
-                    vec3.distanceXZ(currentPoly.center, neighbor.center);
+                // Calcola costo con filtro opzionale
+                const baseCost = vec3.distanceXZ(currentPoly.center, neighbor.center);
+                const cost = filter ? baseCost * filter.getCost(neighborIdx) : baseCost;
+                const tentativeG = gScore.get(current) + cost;
 
                 if (!gScore.has(neighborIdx) || tentativeG < gScore.get(neighborIdx)) {
                     cameFrom.set(neighborIdx, current);
@@ -563,18 +642,26 @@ class FunnelAlgorithm {
 }
 
 // ----------------------------------------------------------------------------
-// PATH CORRIDOR
+// PATH CORRIDOR (implementazione navcat)
 // ----------------------------------------------------------------------------
 class PathCorridor {
     constructor() {
         this.path = [];           // Array di polygon indices
         this.corners = [];        // Array di Vec3 (waypoints)
+        this.position = vec3.create();  // Posizione corrente vincolata (come navcat)
+        this.target = vec3.create();    // Posizione target
         this.currentPoly = null;
-        this.targetPos = vec3.create();
     }
 
-    reset() {
-        this.path = [];
+    reset(nodeRef = null, position = null) {
+        if (position) {
+            vec3.copy(this.position, position);
+            vec3.copy(this.target, position);
+        } else {
+            vec3.set(this.position, 0, 0, 0);
+            vec3.set(this.target, 0, 0, 0);
+        }
+        this.path = nodeRef !== null ? [nodeRef] : [];
         this.corners = [];
         this.currentPoly = null;
     }
@@ -582,65 +669,206 @@ class PathCorridor {
     setPath(polyPath, corners, targetPos) {
         this.path = polyPath ? [...polyPath] : [];
         this.corners = corners ? corners.map(c => vec3.clone(c)) : [];
-        vec3.copy(this.targetPos, targetPos);
+        vec3.copy(this.target, targetPos);
+        // Alias per compatibilità
+        this.targetPos = this.target;
     }
 
-    // Ottimizza il corridoio rimuovendo i poligoni già attraversati
+    // Verifica se il corridoio è valido (come navcat corridorIsValid)
+    isValid(maxLookAhead, navMesh) {
+        const n = Math.min(this.path.length, maxLookAhead);
+
+        for (let i = 0; i < n; i++) {
+            const polyIdx = this.path[i];
+            if (polyIdx < 0 || polyIdx >= navMesh.polygons.length) {
+                return false;
+            }
+        }
+
+        return this.path.length > 0;
+    }
+
+    // Ottimizza il corridoio (versione semplificata di navcat optimizePathTopology)
     optimizePathTopology(agentPos, navMesh) {
-        if (this.path.length <= 1) return;
+        if (this.path.length < 3) return false;
 
         // Trova il poligono corrente dell'agente
         const currentPoly = navMesh.findPolygonAtPosition(agentPos);
-        if (!currentPoly) return;
+        if (!currentPoly) return false;
 
         // Trova l'indice del poligono corrente nel path
         const currentIdx = this.path.indexOf(currentPoly.index);
+
         if (currentIdx > 0) {
             // Rimuovi i poligoni già attraversati
             this.path = this.path.slice(currentIdx);
         }
 
         this.currentPoly = currentPoly;
+
+        // Prova a trovare scorciatoie nel path rimanente
+        // Cerca se possiamo raggiungere direttamente un poligono più avanti
+        if (this.path.length > 2) {
+            const startPoly = navMesh.polygons[this.path[0]];
+            if (startPoly) {
+                // Controlla se possiamo saltare al secondo o terzo poligono
+                for (let i = Math.min(this.path.length - 1, 3); i > 1; i--) {
+                    const targetPolyIdx = this.path[i];
+                    // Verifica se c'è un collegamento diretto
+                    if (startPoly.neighbors.includes(targetPolyIdx)) {
+                        // Possiamo saltare i poligoni intermedi
+                        this.path = [this.path[0], ...this.path.slice(i)];
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Ottimizza il path con visibilità (raycast) - versione semplificata
+    optimizePathVisibility(agentPos, targetCorner, range, navMesh) {
+        if (this.path.length < 2) return;
+
+        // Verifica se il target è direttamente visibile
+        const startPoly = navMesh.polygons[this.path[0]];
+        if (!startPoly) return;
+
+        // Semplice check: se il target corner è nel poligono corrente o adiacente
+        const targetPoly = navMesh.findPolygonAtPosition(targetCorner);
+        if (!targetPoly) return;
+
+        // Se il target è in un poligono adiacente, possiamo potenzialmente accorciare
+        if (startPoly.neighbors.includes(targetPoly.index)) {
+            const targetIdx = this.path.indexOf(targetPoly.index);
+            if (targetIdx > 1) {
+                // Accorcia il path
+                this.path = [this.path[0], targetPoly.index, ...this.path.slice(targetIdx + 1)];
+            }
+        }
     }
 
     getNextCorner() {
         if (this.corners.length > 1) {
             return this.corners[1]; // Il primo corner è la posizione attuale
         }
-        return this.targetPos;
+        return this.target;
     }
 }
 
 // ----------------------------------------------------------------------------
-// LOCAL BOUNDARY - Bordi statici per collision avoidance
+// LOCAL BOUNDARY - Bordi statici per collision avoidance (implementazione navcat)
 // ----------------------------------------------------------------------------
+const MAX_LOCAL_SEGS = 8;
+const MAX_LOCAL_POLYS = 16;
+
 class LocalBoundary {
     constructor() {
+        this.segments = [];  // Array di {start, end, dist}
+        this.polys = [];     // Array di polygon indices
+        this.center = vec3.create(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE);
+    }
+
+    reset() {
+        vec3.set(this.center, Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE);
         this.segments = [];
-        this.center = vec3.create();
+        this.polys = [];
+    }
+
+    // Calcola distanza^2 da punto a segmento in 2D
+    distancePtSegSqr2d(pt, segStart, segEnd) {
+        const pqx = segEnd.x - segStart.x;
+        const pqz = segEnd.z - segStart.z;
+        const dx = pt.x - segStart.x;
+        const dz = pt.z - segStart.z;
+
+        const d = pqx * pqx + pqz * pqz;
+        let t = pqx * dx + pqz * dz;
+        if (d > 0) t /= d;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+
+        const nearestX = segStart.x + t * pqx;
+        const nearestZ = segStart.z + t * pqz;
+
+        const distX = pt.x - nearestX;
+        const distZ = pt.z - nearestZ;
+
+        return distX * distX + distZ * distZ;
+    }
+
+    // Aggiunge un segmento ordinato per distanza (come navcat)
+    addSegment(dist, start, end) {
+        // Trova punto di inserimento basato sulla distanza
+        let insertIdx = 0;
+        for (let i = 0; i < this.segments.length; i++) {
+            if (dist <= this.segments[i].dist) {
+                insertIdx = i;
+                break;
+            }
+            insertIdx = i + 1;
+        }
+
+        // Non superare il massimo di segmenti
+        if (this.segments.length >= MAX_LOCAL_SEGS) {
+            if (insertIdx >= MAX_LOCAL_SEGS) return;
+            this.segments.pop();
+        }
+
+        // Crea nuovo segmento
+        const segment = {
+            start: vec3.clone(start),
+            end: vec3.clone(end),
+            dist: dist
+        };
+
+        // Inserisci nella posizione corretta
+        this.segments.splice(insertIdx, 0, segment);
     }
 
     update(agentPos, navMesh, range) {
-        this.segments = [];
         vec3.copy(this.center, agentPos);
+        this.segments = [];
+        this.polys = [];
+
+        const rangeSqr = range * range;
 
         // Trova tutti i poligoni nel range
         for (const poly of navMesh.polygons) {
             if (vec3.distanceXZ(agentPos, poly.center) > range * 2) continue;
 
+            // Limita il numero di poligoni
+            if (this.polys.length < MAX_LOCAL_POLYS) {
+                this.polys.push(poly.index);
+            }
+
             // Aggiungi i bordi non condivisi (muri)
             const edges = navMesh.getPolygonEdges(poly);
             for (const edge of edges) {
-                // Verifica se il bordo è nel range
-                const closest = navMesh.closestPointOnSegment(agentPos, edge.start, edge.end);
-                if (vec3.distanceXZ(agentPos, closest) <= range) {
-                    this.segments.push({
-                        start: vec3.clone(edge.start),
-                        end: vec3.clone(edge.end)
-                    });
-                }
+                // Calcola distanza dal segmento
+                const distSqr = this.distancePtSegSqr2d(agentPos, edge.start, edge.end);
+
+                // Salta segmenti troppo lontani
+                if (distSqr > rangeSqr) continue;
+
+                // Aggiungi ordinato per distanza
+                this.addSegment(distSqr, edge.start, edge.end);
             }
         }
+    }
+
+    // Verifica se il boundary è ancora valido
+    isValid(navMesh) {
+        if (this.polys.length === 0) return false;
+
+        for (const polyIdx of this.polys) {
+            if (polyIdx < 0 || polyIdx >= navMesh.polygons.length) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
@@ -696,7 +924,7 @@ class ProximityGrid {
 }
 
 // ----------------------------------------------------------------------------
-// OBSTACLE AVOIDANCE - Velocity Sampling
+// OBSTACLE AVOIDANCE - Velocity Sampling (implementazione navcat)
 // ----------------------------------------------------------------------------
 class ObstacleAvoidanceQuery {
     constructor() {
@@ -712,175 +940,363 @@ class ObstacleAvoidanceQuery {
             adaptiveRings: 2,
             adaptiveDepth: 5
         };
+        this.circles = [];
+        this.segments = [];
+        this.invHorizTime = 0;
+        this.vmax = 0;
+        this.invVmax = 0;
     }
 
-    // Campionamento adattivo della velocità
-    sampleVelocityAdaptive(pos, radius, vmax, vel, desiredVel, neighbors, segments) {
-        const result = vec3.clone(desiredVel);
+    // Prepara gli ostacoli prima del sampling (come navcat)
+    prepareObstacles(pos, desiredVel, neighbors, boundarySegments) {
+        this.circles = [];
+        this.segments = [];
 
-        if (neighbors.length === 0 && segments.length === 0) {
-            return result;
+        // Prepara ostacoli circolari (altri agenti)
+        for (const neighbor of neighbors) {
+            const circle = {
+                p: neighbor.position,
+                vel: neighbor.velocity,
+                dvel: neighbor.desiredVelocity,
+                rad: neighbor.radius,
+                dp: vec3.create(),  // direzione verso l'ostacolo
+                np: vec3.create()   // normale per side selection
+            };
+
+            // Calcola dp (direzione verso l'ostacolo)
+            vec3.sub(circle.dp, circle.p, pos);
+            vec3.normalize(circle.dp, circle.dp);
+
+            // Calcola np (normale per side selection)
+            const dv = vec3.create();
+            vec3.sub(dv, circle.dvel, desiredVel);
+            const orig = vec3.create();
+            const a = this.triArea2D(orig, circle.dp, dv);
+
+            if (a < 0.01) {
+                circle.np.x = -circle.dp.z;
+                circle.np.y = 0;
+                circle.np.z = circle.dp.x;
+            } else {
+                circle.np.x = circle.dp.z;
+                circle.np.y = 0;
+                circle.np.z = -circle.dp.x;
+            }
+
+            this.circles.push(circle);
         }
 
-        // Prepara gli ostacoli circolari (altri agenti)
-        const circles = neighbors.map(n => ({
-            position: n.position,
-            velocity: n.velocity,
-            radius: n.radius
-        }));
+        // Prepara segmenti (muri)
+        for (const seg of boundarySegments) {
+            const segment = {
+                p: seg.start,
+                q: seg.end,
+                touch: false
+            };
 
-        let bestPenalty = Infinity;
-        let bestVel = vec3.clone(desiredVel);
+            // Controlla se l'agente è molto vicino al segmento
+            const distSqr = this.distancePtSegSqr2D(pos, seg.start, seg.end);
+            segment.touch = distSqr < 0.01 * 0.01;
 
-        const invHorizTime = 1.0 / this.params.horizTime;
-        const invVmax = 1.0 / Math.max(vmax, 0.001);
+            this.segments.push(segment);
+        }
+    }
 
-        // Campionamento adattivo
-        const nDivs = this.params.adaptiveDivs;
-        const nRings = this.params.adaptiveRings;
+    triArea2D(a, b, c) {
+        const abx = b.x - a.x;
+        const abz = b.z - a.z;
+        const acx = c.x - a.x;
+        const acz = c.z - a.z;
+        return acx * abz - abx * acz;
+    }
+
+    distancePtSegSqr2D(pt, p, q) {
+        const pqx = q.x - p.x;
+        const pqz = q.z - p.z;
+        const dx = pt.x - p.x;
+        const dz = pt.z - p.z;
+
+        const d = pqx * pqx + pqz * pqz;
+        let t = pqx * dx + pqz * dz;
+        if (d > 0) t /= d;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+
+        const nearestX = p.x + t * pqx;
+        const nearestZ = p.z + t * pqz;
+
+        const distX = pt.x - nearestX;
+        const distZ = pt.z - nearestZ;
+
+        return distX * distX + distZ * distZ;
+    }
+
+    // Campionamento adattivo della velocità (algoritmo navcat)
+    sampleVelocityAdaptive(pos, radius, vmax, vel, desiredVel, neighbors, segments) {
+        if (neighbors.length === 0 && segments.length === 0) {
+            return vec3.clone(desiredVel);
+        }
+
+        // Prepara gli ostacoli
+        this.prepareObstacles(pos, desiredVel, neighbors, segments);
+
+        this.invHorizTime = 1.0 / this.params.horizTime;
+        this.vmax = vmax;
+        this.invVmax = vmax > 0 ? 1.0 / vmax : Infinity;
+
+        const nDivs = Math.max(1, Math.min(this.params.adaptiveDivs, 32));
+        const nRings = Math.max(1, Math.min(this.params.adaptiveRings, 4));
         const depth = this.params.adaptiveDepth;
 
-        let cr = vmax;
-        const center = vec3.clone(desiredVel);
+        // Genera pattern allineato alla velocità desiderata
+        const pattern = this.generateAdaptivePattern(desiredVel, nDivs, nRings);
 
-        for (let d = 0; d < depth; d++) {
-            const pattern = this.generatePattern(center, cr, nDivs, nRings);
+        // Inizia il sampling
+        let cr = vmax * (1.0 - this.params.velBias);
+        const res = vec3.create(
+            desiredVel.x * this.params.velBias,
+            0,
+            desiredVel.z * this.params.velBias
+        );
 
-            for (const vcand of pattern) {
-                // Verifica che la velocità candidata sia valida
-                const speed = Math.sqrt(vcand.x * vcand.x + vcand.z * vcand.z);
-                if (speed > vmax + 0.001) continue;
+        const vmaxSqr = (vmax + 0.001) * (vmax + 0.001);
 
-                const penalty = this.evaluateVelocity(
-                    pos, radius, vcand, vel, desiredVel,
-                    circles, segments, invHorizTime, invVmax
+        for (let k = 0; k < depth; k++) {
+            let minPenalty = Infinity;
+            const bvel = vec3.create();
+
+            for (const p of pattern) {
+                const vcand = vec3.create(
+                    res.x + p.x * cr,
+                    0,
+                    res.z + p.z * cr
                 );
 
-                if (penalty < bestPenalty) {
-                    bestPenalty = penalty;
-                    vec3.copy(bestVel, vcand);
+                // Verifica limiti velocità
+                if (vcand.x * vcand.x + vcand.z * vcand.z > vmaxSqr) {
+                    continue;
+                }
+
+                const penalty = this.processSample(vcand, pos, radius, vel, desiredVel, minPenalty);
+
+                if (penalty < minPenalty) {
+                    minPenalty = penalty;
+                    vec3.copy(bvel, vcand);
                 }
             }
 
-            // Affina intorno alla migliore velocità trovata
-            vec3.copy(center, bestVel);
+            vec3.copy(res, bvel);
             cr *= 0.5;
         }
 
-        return bestVel;
+        return res;
     }
 
-    generatePattern(center, radius, nDivs, nRings) {
+    generateAdaptivePattern(desiredVel, nDivs, nRings) {
         const pattern = [];
+        const da = (1.0 / nDivs) * Math.PI * 2;
+        const ca = Math.cos(da);
+        const sa = Math.sin(da);
 
-        // Centro
-        pattern.push(vec3.clone(center));
+        // Direzione desiderata normalizzata
+        const ddir = vec3.clone(desiredVel);
+        const len = Math.sqrt(ddir.x * ddir.x + ddir.z * ddir.z);
+        if (len > 0.001) {
+            ddir.x /= len;
+            ddir.z /= len;
+        } else {
+            ddir.x = 1;
+            ddir.z = 0;
+        }
 
-        // Anelli concentrici
-        for (let ring = 1; ring <= nRings; ring++) {
-            const r = radius * (ring / nRings);
-            const nSamples = nDivs * ring;
+        // Direzione ruotata di da/2
+        const ddir2 = vec3.create(
+            ddir.x * Math.cos(da * 0.5) - ddir.z * Math.sin(da * 0.5),
+            0,
+            ddir.x * Math.sin(da * 0.5) + ddir.z * Math.cos(da * 0.5)
+        );
 
-            for (let i = 0; i < nSamples; i++) {
-                const angle = (2 * Math.PI * i) / nSamples;
-                pattern.push(vec3.create(
-                    center.x + Math.cos(angle) * r,
-                    0,
-                    center.z + Math.sin(angle) * r
-                ));
+        // Aggiungi sempre il centro
+        pattern.push(vec3.create(0, 0, 0));
+
+        // Genera anelli
+        for (let j = 0; j < nRings; j++) {
+            const r = (nRings - j) / nRings;
+            const baseDir = (j % 2 === 0) ? ddir : ddir2;
+
+            let px = baseDir.x * r;
+            let pz = baseDir.z * r;
+            pattern.push(vec3.create(px, 0, pz));
+
+            // Genera punti alternati a destra e sinistra
+            for (let i = 1; i < nDivs; i++) {
+                // Ruota
+                const newPx = px * ca + pz * sa;
+                const newPz = -px * sa + pz * ca;
+                px = newPx;
+                pz = newPz;
+                pattern.push(vec3.create(px, 0, pz));
             }
         }
 
         return pattern;
     }
 
-    evaluateVelocity(pos, radius, vcand, vel, desiredVel, circles, segments, invHorizTime, invVmax) {
+    processSample(vcand, pos, radius, vel, desiredVel, minPenalty) {
         // Penalità per distanza dalla velocità desiderata
-        const dv = vec3.create();
-        vec3.sub(dv, vcand, desiredVel);
-        const vpen = this.params.weightDesVel * Math.sqrt(dv.x * dv.x + dv.z * dv.z) * invVmax;
+        const vpen = this.params.weightDesVel * this.vdist2D(vcand, desiredVel) * this.invVmax;
 
         // Penalità per cambiamento dalla velocità corrente
-        vec3.sub(dv, vcand, vel);
-        const vcpen = this.params.weightCurVel * Math.sqrt(dv.x * dv.x + dv.z * dv.z) * invVmax;
+        const vcpen = this.params.weightCurVel * this.vdist2D(vcand, vel) * this.invVmax;
 
-        // Penalità per direzione laterale (preferenza per un lato)
-        let spen = 0;
-        if (desiredVel.x * vcand.z - desiredVel.z * vcand.x > 0) {
-            spen = this.params.weightSide;
+        // Early out check
+        const minPen = minPenalty - vpen - vcpen;
+        const tThreshold = (this.params.weightToi / minPen - 0.1) * this.params.horizTime;
+        if (tThreshold - this.params.horizTime > -0.0001) {
+            return minPenalty;
         }
 
-        // Penalità per tempo alla collisione
-        let minToi = Infinity;
+        let tmin = this.params.horizTime;
+        let side = 0;
+        let nside = 0;
 
-        // Controlla collisioni con altri agenti
-        for (const circle of circles) {
-            const toi = this.timeToCollisionCircle(pos, radius, vcand, circle);
-            if (toi < minToi) minToi = toi;
+        // Controlla ostacoli circolari (altri agenti) con RVO
+        for (const cir of this.circles) {
+            // RVO: vab = vcand * 2 - vel - cir.vel
+            const vab = vec3.create(
+                vcand.x * 2 - vel.x - cir.vel.x,
+                0,
+                vcand.z * 2 - vel.z - cir.vel.z
+            );
+
+            // Side bias calculation
+            side += Math.max(0, Math.min(1, Math.min(
+                this.vdot2D(cir.dp, vab) * 0.5 + 0.5,
+                this.vdot2D(cir.np, vab) * 2
+            )));
+            nside++;
+
+            // Sweep circle-circle
+            const sweep = this.sweepCircleCircle(pos, radius, vab, cir.p, cir.rad);
+            if (!sweep.hit) continue;
+
+            let htmin = sweep.tmin;
+            const htmax = sweep.tmax;
+
+            // Gestisci sovrapposizioni
+            if (htmin < 0.0 && htmax > 0.0) {
+                htmin = -htmin * 0.5;
+            }
+
+            if (htmin >= 0.0 && htmin < tmin) {
+                tmin = htmin;
+                if (tmin < tThreshold) {
+                    return minPenalty;
+                }
+            }
         }
 
-        // Controlla collisioni con segmenti (muri)
-        for (const seg of segments) {
-            const toi = this.timeToCollisionSegment(pos, radius, vcand, seg);
-            if (toi < minToi) minToi = toi;
+        // Controlla segmenti (muri)
+        for (const seg of this.segments) {
+            let htmin;
+
+            if (seg.touch) {
+                // Caso speciale: agente molto vicino al segmento
+                const sdir = vec3.create(seg.q.x - seg.p.x, 0, seg.q.z - seg.p.z);
+                const snorm = vec3.create(-sdir.z, 0, sdir.x);
+
+                if (this.vdot2D(snorm, vcand) < 0.0) continue;
+                htmin = 0.0;
+            } else {
+                const intersection = this.intersectRaySegment(pos, vcand, seg.p, seg.q);
+                if (!intersection.hit) continue;
+                htmin = intersection.t;
+            }
+
+            // Evita meno i muri (moltiplica per 2)
+            htmin *= 2.0;
+
+            if (htmin < tmin) {
+                tmin = htmin;
+                if (tmin < tThreshold) {
+                    return minPenalty;
+                }
+            }
         }
 
-        const tpen = this.params.weightToi * (1.0 / (0.1 + minToi * invHorizTime));
+        // Normalizza side bias
+        if (nside > 0) {
+            side /= nside;
+        }
+
+        const spen = this.params.weightSide * side;
+        const tpen = this.params.weightToi * (1.0 / (0.1 + tmin * this.invHorizTime));
 
         return vpen + vcpen + spen + tpen;
     }
 
-    timeToCollisionCircle(pos, radius, vel, circle) {
-        // Calcola il tempo alla collisione con un ostacolo circolare
-        const dx = circle.position.x - pos.x;
-        const dz = circle.position.z - pos.z;
-        const dvx = vel.x - circle.velocity.x;
-        const dvz = vel.z - circle.velocity.z;
-        const r = radius + circle.radius;
-
-        const a = dvx * dvx + dvz * dvz;
-        if (a < 0.0001) return Infinity;
-
-        const b = 2 * (dx * dvx + dz * dvz);
-        const c = dx * dx + dz * dz - r * r;
-
-        const discriminant = b * b - 4 * a * c;
-        if (discriminant < 0) return Infinity;
-
-        const t = (-b - Math.sqrt(discriminant)) / (2 * a);
-        return t > 0 ? t : Infinity;
+    vdist2D(a, b) {
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        return Math.sqrt(dx * dx + dz * dz);
     }
 
-    timeToCollisionSegment(pos, radius, vel, segment) {
-        // Calcola il tempo alla collisione con un segmento
-        const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
-        if (speed < 0.001) return Infinity;
+    vdot2D(a, b) {
+        return a.x * b.x + a.z * b.z;
+    }
 
-        // Direzione del movimento
-        const dirX = vel.x / speed;
-        const dirZ = vel.z / speed;
+    vperp2D(a, b) {
+        return a.x * b.z - a.z * b.x;
+    }
 
-        // Vettore del segmento
-        const segDx = segment.end.x - segment.start.x;
-        const segDz = segment.end.z - segment.start.z;
+    sweepCircleCircle(c0, r0, v, c1, r1) {
+        const result = { hit: false, tmin: 0, tmax: 0 };
 
-        // Calcola l'intersezione ray-segment
-        const denom = dirX * segDz - dirZ * segDx;
-        if (Math.abs(denom) < 0.0001) return Infinity;
+        const sx = c1.x - c0.x;
+        const sz = c1.z - c0.z;
+        const r = r0 + r1;
 
-        const dx = segment.start.x - pos.x;
-        const dz = segment.start.z - pos.z;
+        const sSqr = sx * sx + sz * sz;
+        const c = sSqr - r * r;
 
-        const t = (dx * segDz - dz * segDx) / denom;
-        const u = (dx * dirZ - dz * dirX) / denom;
+        const a = v.x * v.x + v.z * v.z;
+        if (a < 0.0001) return result;
 
-        if (t > 0 && u >= 0 && u <= 1) {
-            // Considera il raggio dell'agente
-            const adjustedT = (t * speed - radius) / speed;
-            return adjustedT > 0 ? adjustedT : 0;
-        }
+        const b = v.x * sx + v.z * sz;
+        const d = b * b - a * c;
 
-        return Infinity;
+        if (d < 0.0) return result;
+
+        const invA = 1.0 / a;
+        const rd = Math.sqrt(d);
+        result.hit = true;
+        result.tmin = (b - rd) * invA;
+        result.tmax = (b + rd) * invA;
+
+        return result;
+    }
+
+    intersectRaySegment(ap, u, bp, bq) {
+        const result = { hit: false, t: 0 };
+
+        const vx = bq.x - bp.x;
+        const vz = bq.z - bp.z;
+        const wx = ap.x - bp.x;
+        const wz = ap.z - bp.z;
+
+        const d = this.vperp2D(u, { x: vx, z: vz });
+        if (Math.abs(d) < 0.000001) return result;
+
+        const invD = 1.0 / d;
+        const t = (vx * wz - vz * wx) * invD;
+        if (t < 0 || t > 1) return result;
+
+        const s = (u.x * wz - u.z * wx) * invD;
+        if (s < 0 || s > 1) return result;
+
+        result.hit = true;
+        result.t = t;
+        return result;
     }
 }
 
@@ -893,34 +1309,47 @@ class Agent {
         this.state = AgentState.WALKING;
         this.targetState = AgentTargetState.NONE;
 
-        // Configurazione
+        // Configurazione (come navcat AgentParams)
         this.radius = 0.3;
         this.height = 1.8;
         this.maxAcceleration = 8.0;
         this.maxSpeed = 3.5;
         this.collisionQueryRange = 3.0;
-        this.pathOptimizationRange = 10.0;
+        this.pathOptimizationRange = 10.0;  // Default: radius * 30
         this.separationWeight = 2.0;
 
-        // Stato
+        // Flag di update (come navcat CrowdUpdateFlags)
+        this.updateFlags = CrowdUpdateFlags.ANTICIPATE_TURNS |
+                          CrowdUpdateFlags.OBSTACLE_AVOIDANCE |
+                          CrowdUpdateFlags.SEPARATION |
+                          CrowdUpdateFlags.OPTIMIZE_VIS |
+                          CrowdUpdateFlags.OPTIMIZE_TOPO;
+
+        // Stato cinematico
         this.position = vec3.create();
         this.velocity = vec3.create();
         this.desiredVelocity = vec3.create();
+        this.desiredSpeed = 0;              // Velocità desiderata (magnitudine)
         this.newVelocity = vec3.create();
+        this.displacement = vec3.create();  // Per collision resolution
 
         // Navigazione
         this.corridor = new PathCorridor();
         this.boundary = new LocalBoundary();
         this.targetPosition = vec3.create();
+        this.corners = [];                  // Corner calcolati per steering
 
         // Vicini
         this.neighbors = [];
+
+        // Timers per ottimizzazioni (come navcat)
+        this.topologyOptTime = 0;
 
         // Selezione UI
         this.selected = false;
     }
 
-    setTarget(targetPos, navMesh, pathFinder, funnelAlgo) {
+    setTarget(targetPos, navMesh, pathFinder, funnelAlgo, filter = null) {
         vec3.copy(this.targetPosition, targetPos);
 
         const startPoly = navMesh.findPolygonAtPosition(this.position);
@@ -931,7 +1360,20 @@ class Agent {
             return false;
         }
 
-        const polyPath = pathFinder.findPath(startPoly, endPoly);
+        // Verifica che i poligoni non siano bloccati
+        if (filter) {
+            if (!filter.passFilter(startPoly.index, navMesh)) {
+                this.targetState = AgentTargetState.FAILED;
+                return false;
+            }
+            if (!filter.passFilter(endPoly.index, navMesh)) {
+                this.targetState = AgentTargetState.FAILED;
+                return false;
+            }
+        }
+
+        // Trova il path usando il filtro
+        const polyPath = pathFinder.findPath(startPoly, endPoly, filter);
 
         if (!polyPath) {
             this.targetState = AgentTargetState.FAILED;
@@ -958,6 +1400,8 @@ class Crowd {
         this.funnelAlgo = null;
         this.proximityGrid = new ProximityGrid(2.0);
         this.obstacleAvoidance = new ObstacleAvoidanceQuery();
+        // Filtro globale per poligoni accessibili (navmesh dinamica)
+        this.queryFilter = new QueryFilter();
     }
 
     setNavMesh(navMesh) {
@@ -966,7 +1410,102 @@ class Crowd {
         this.funnelAlgo = new FunnelAlgorithm(navMesh);
     }
 
-    addAgent(position) {
+    // ==================== GESTIONE POLIGONI DINAMICI ====================
+
+    // Blocca un poligono (lo rende non attraversabile)
+    blockPolygon(polyIndex) {
+        this.queryFilter.blockPolygon(polyIndex);
+        // Invalida i path degli agenti che usano questo poligono
+        this.invalidatePathsThroughPolygon(polyIndex);
+    }
+
+    // Sblocca un poligono (lo rende attraversabile)
+    unblockPolygon(polyIndex) {
+        this.queryFilter.unblockPolygon(polyIndex);
+        // Gli agenti con path falliti potrebbero ora trovare un percorso
+        this.retryFailedPaths();
+    }
+
+    // Verifica se un poligono è bloccato
+    isPolygonBlocked(polyIndex) {
+        return this.queryFilter.isBlocked(polyIndex);
+    }
+
+    // Imposta il costo di attraversamento di un poligono (per evitamento soft)
+    setPolygonCost(polyIndex, cost) {
+        this.queryFilter.setPolygonCost(polyIndex, cost);
+        // Opzionale: ripianifica gli agenti che passano per questo poligono
+        // per cercare percorsi migliori
+    }
+
+    // Blocca/sblocca un poligono (toggle)
+    togglePolygonBlock(polyIndex) {
+        if (this.queryFilter.isBlocked(polyIndex)) {
+            this.unblockPolygon(polyIndex);
+            return false; // ora sbloccato
+        } else {
+            this.blockPolygon(polyIndex);
+            return true; // ora bloccato
+        }
+    }
+
+    // Invalida i path di tutti gli agenti che passano per un poligono
+    invalidatePathsThroughPolygon(polyIndex) {
+        for (const agent of this.agents.values()) {
+            if (agent.targetState !== AgentTargetState.VALID) continue;
+
+            // Controlla se il path dell'agente passa per il poligono bloccato
+            if (agent.corridor.path.includes(polyIndex)) {
+                // Salva il target e ripianifica
+                const targetPos = vec3.clone(agent.targetPosition);
+                agent.corridor.reset();
+                agent.corners = [];
+                agent.boundary.reset();
+
+                // Prova a ripianificare
+                const success = agent.setTarget(
+                    targetPos,
+                    this.navMesh,
+                    this.pathFinder,
+                    this.funnelAlgo,
+                    this.queryFilter
+                );
+
+                if (!success) {
+                    agent.targetState = AgentTargetState.FAILED;
+                }
+            }
+        }
+    }
+
+    // Riprova a pianificare per gli agenti con path falliti
+    retryFailedPaths() {
+        for (const agent of this.agents.values()) {
+            if (agent.targetState === AgentTargetState.FAILED) {
+                // Prova a ripianificare verso il target originale
+                agent.setTarget(
+                    agent.targetPosition,
+                    this.navMesh,
+                    this.pathFinder,
+                    this.funnelAlgo,
+                    this.queryFilter
+                );
+            }
+        }
+    }
+
+    // Ottieni lista di tutti i poligoni bloccati
+    getBlockedPolygons() {
+        return Array.from(this.queryFilter.blockedPolygons);
+    }
+
+    // Sblocca tutti i poligoni
+    clearAllBlocks() {
+        this.queryFilter.clearAllBlocks();
+        this.retryFailedPaths();
+    }
+
+    addAgent(position, params = {}) {
         if (!this.navMesh) return null;
 
         // Verifica che la posizione sia sulla navmesh
@@ -977,8 +1516,97 @@ class Crowd {
         vec3.copy(agent.position, point);
         agent.corridor.currentPoly = polygon;
 
+        // Applica parametri personalizzati (supporto agenti di dimensioni diverse)
+        if (params.radius !== undefined) agent.radius = params.radius;
+        if (params.height !== undefined) agent.height = params.height;
+        if (params.maxSpeed !== undefined) agent.maxSpeed = params.maxSpeed;
+        if (params.maxAcceleration !== undefined) agent.maxAcceleration = params.maxAcceleration;
+        if (params.collisionQueryRange !== undefined) agent.collisionQueryRange = params.collisionQueryRange;
+        if (params.pathOptimizationRange !== undefined) agent.pathOptimizationRange = params.pathOptimizationRange;
+        if (params.separationWeight !== undefined) agent.separationWeight = params.separationWeight;
+        if (params.updateFlags !== undefined) agent.updateFlags = params.updateFlags;
+
         this.agents.set(agent.id, agent);
         return agent;
+    }
+
+    // Aggiorna la navmesh (supporto navmesh dinamiche)
+    updateNavMesh(navMesh) {
+        this.navMesh = navMesh;
+        this.pathFinder = new PathFinder(navMesh);
+        this.funnelAlgo = new FunnelAlgorithm(navMesh);
+
+        // Invalida tutti i path degli agenti e forza ripianificazione
+        for (const agent of this.agents.values()) {
+            this.invalidateAgentPath(agent);
+        }
+    }
+
+    // Invalida il path di un singolo agente
+    invalidateAgentPath(agent) {
+        // Salva il target corrente se valido
+        const hadTarget = agent.targetState === AgentTargetState.VALID;
+        const targetPos = vec3.clone(agent.targetPosition);
+
+        // Reset del corridor e boundary
+        agent.corridor.reset();
+        agent.boundary.reset();
+        agent.corners = [];
+
+        // Riproietta l'agente sulla nuova navmesh
+        const { point, polygon } = this.navMesh.projectToNavMesh(agent.position);
+        if (polygon) {
+            vec3.copy(agent.position, point);
+            agent.corridor.currentPoly = polygon;
+            agent.state = AgentState.WALKING;
+
+            // Ripianifica verso il target precedente se esisteva
+            if (hadTarget) {
+                agent.setTarget(targetPos, this.navMesh, this.pathFinder, this.funnelAlgo);
+            }
+        } else {
+            // Agente fuori dalla navmesh
+            agent.state = AgentState.INVALID;
+            agent.targetState = AgentTargetState.NONE;
+        }
+    }
+
+    // Notifica che una regione della navmesh è cambiata
+    notifyNavMeshRegionChanged(minBounds, maxBounds) {
+        // Invalida i path degli agenti che passano per la regione modificata
+        for (const agent of this.agents.values()) {
+            // Controlla se l'agente è nella regione o se il suo path la attraversa
+            if (this.agentAffectedByRegion(agent, minBounds, maxBounds)) {
+                this.invalidateAgentPath(agent);
+            }
+        }
+    }
+
+    // Verifica se un agente è affetto da una modifica in una regione
+    agentAffectedByRegion(agent, minBounds, maxBounds) {
+        // Controlla se la posizione dell'agente è nella regione
+        if (agent.position.x >= minBounds.x && agent.position.x <= maxBounds.x &&
+            agent.position.z >= minBounds.z && agent.position.z <= maxBounds.z) {
+            return true;
+        }
+
+        // Controlla se il target è nella regione
+        if (agent.targetState === AgentTargetState.VALID) {
+            if (agent.targetPosition.x >= minBounds.x && agent.targetPosition.x <= maxBounds.x &&
+                agent.targetPosition.z >= minBounds.z && agent.targetPosition.z <= maxBounds.z) {
+                return true;
+            }
+        }
+
+        // Controlla se qualche corner attraversa la regione
+        for (const corner of agent.corners) {
+            if (corner.x >= minBounds.x && corner.x <= maxBounds.x &&
+                corner.z >= minBounds.z && corner.z <= maxBounds.z) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     removeAgent(id) {
@@ -995,7 +1623,7 @@ class Crowd {
 
     setTargetForSelected(targetPos) {
         for (const agent of this.getSelectedAgents()) {
-            agent.setTarget(targetPos, this.navMesh, this.pathFinder, this.funnelAlgo);
+            agent.setTarget(targetPos, this.navMesh, this.pathFinder, this.funnelAlgo, this.queryFilter);
         }
     }
 
@@ -1003,14 +1631,14 @@ class Crowd {
     update(dt) {
         if (!this.navMesh || this.agents.size === 0) return;
 
-        // Fase 1: Costruzione griglia di prossimità
-        this.updateProximityGrid();
-
-        // Fase 2: Validazione posizione e corridoio
+        // Fase 1: Validazione posizione e corridoio
         this.checkPathValidity();
 
-        // Fase 3: Ottimizzazione topologica del corridoio
-        this.updateTopologyOptimization();
+        // Fase 2: Ottimizzazione topologica del corridoio (con throttling)
+        this.updateTopologyOptimization(dt);
+
+        // Fase 3: Costruzione griglia di prossimità
+        this.updateProximityGrid();
 
         // Fase 4: Trova vicini per ogni agente
         this.updateNeighbors();
@@ -1060,10 +1688,44 @@ class Crowd {
         }
     }
 
-    updateTopologyOptimization() {
+    updateTopologyOptimization(dt) {
+        // Throttling come navcat: solo alcuni agenti per frame
+        const OPT_TIME_THR = 0.5; // secondi
+        const OPT_MAX_AGENTS = 1;
+
+        const queue = [];
+
         for (const agent of this.agents.values()) {
+            if (agent.state !== AgentState.WALKING) continue;
             if (agent.targetState !== AgentTargetState.VALID) continue;
+            // Controlla flag OPTIMIZE_TOPO
+            if ((agent.updateFlags & CrowdUpdateFlags.OPTIMIZE_TOPO) === 0) continue;
+
+            agent.topologyOptTime += dt;
+
+            if (agent.topologyOptTime >= OPT_TIME_THR) {
+                // Inserisci in coda in base al tempo di attesa (più lungo = priorità maggiore)
+                let inserted = false;
+                for (let i = 0; i < queue.length; i++) {
+                    if (agent.topologyOptTime >= queue[i].topologyOptTime) {
+                        queue.splice(i, 0, agent);
+                        inserted = true;
+                        break;
+                    }
+                }
+                if (!inserted && queue.length < OPT_MAX_AGENTS) {
+                    queue.push(agent);
+                }
+                if (queue.length > OPT_MAX_AGENTS) {
+                    queue.length = OPT_MAX_AGENTS;
+                }
+            }
+        }
+
+        // Ottimizza solo gli agenti in coda
+        for (const agent of queue) {
             agent.corridor.optimizePathTopology(agent.position, this.navMesh);
+            agent.topologyOptTime = 0;
         }
     }
 
@@ -1078,16 +1740,30 @@ class Crowd {
 
     updateLocalBoundaries() {
         for (const agent of this.agents.values()) {
-            agent.boundary.update(
-                agent.position,
-                this.navMesh,
-                agent.collisionQueryRange
-            );
+            if (agent.state !== AgentState.WALKING) continue;
+            if (agent.corridor.path.length === 0) continue;
+
+            // Aggiorna solo se l'agente si è mosso significativamente (come navcat)
+            const updateThreshold = agent.collisionQueryRange * 0.25;
+            const movedDistance = vec3.distanceXZ(agent.position, agent.boundary.center);
+
+            if (movedDistance > updateThreshold || agent.boundary.segments.length === 0) {
+                agent.boundary.update(
+                    agent.position,
+                    this.navMesh,
+                    agent.collisionQueryRange
+                );
+            }
         }
     }
 
     updateSteering() {
         for (const agent of this.agents.values()) {
+            if (agent.state !== AgentState.WALKING) {
+                vec3.set(agent.desiredVelocity, 0, 0, 0);
+                continue;
+            }
+
             if (agent.targetState !== AgentTargetState.VALID) {
                 vec3.set(agent.desiredVelocity, 0, 0, 0);
                 continue;
@@ -1095,46 +1771,191 @@ class Crowd {
 
             // Ricalcola i corner usando il funnel algorithm
             if (agent.corridor.path.length > 0) {
-                agent.corridor.corners = this.funnelAlgo.findStraightPath(
+                agent.corners = this.funnelAlgo.findStraightPath(
                     agent.position,
-                    agent.corridor.targetPos,
+                    agent.corridor.target,
                     agent.corridor.path
                 );
+                agent.corridor.corners = agent.corners;
             }
 
-            // Trova il prossimo waypoint
-            const nextCorner = agent.corridor.getNextCorner();
+            if (agent.corners.length === 0) {
+                vec3.set(agent.desiredVelocity, 0, 0, 0);
+                continue;
+            }
 
-            // Calcola distanza dal target
-            const distToTarget = vec3.distanceXZ(agent.position, agent.corridor.targetPos);
+            // Ottimizzazione visibilità (se flag attivo)
+            if ((agent.updateFlags & CrowdUpdateFlags.OPTIMIZE_VIS) !== 0 && agent.corners.length > 0) {
+                const targetIndex = Math.min(1, agent.corners.length - 1);
+                const target = agent.corners[targetIndex];
+                agent.corridor.optimizePathVisibility(agent.position, target, agent.pathOptimizationRange, this.navMesh);
+            }
+
+            // Calcola steering direction
+            const anticipateTurns = (agent.updateFlags & CrowdUpdateFlags.ANTICIPATE_TURNS) !== 0;
+
+            if (anticipateTurns && agent.corners.length > 1) {
+                // Smooth steering con anticipazione (come navcat calcSmoothSteerDirection)
+                this.calcSmoothSteerDirection(agent, agent.corners);
+            } else {
+                // Steering dritto verso il primo corner
+                this.calcStraightSteerDirection(agent, agent.corners);
+            }
+
+            // Calcola distanza dal target per slowdown
+            const distToGoal = this.getDistanceToGoal(agent, agent.radius * 2);
+
+            // Scala la velocità per arrivo morbido
+            agent.desiredSpeed = agent.maxSpeed;
+            const slowDownRadius = agent.radius * 2;
+            const speedScale = Math.min(1.0, distToGoal / slowDownRadius);
+            vec3.scale(agent.desiredVelocity, agent.desiredVelocity, speedScale);
 
             // Se siamo arrivati
-            if (distToTarget < agent.radius * 0.5) {
+            if (distToGoal < agent.radius * 0.5) {
                 vec3.set(agent.desiredVelocity, 0, 0, 0);
                 agent.targetState = AgentTargetState.NONE;
                 agent.corridor.reset();
                 continue;
             }
 
-            // Calcola direzione verso il prossimo corner
-            const dir = vec3.create();
-            vec3.sub(dir, nextCorner, agent.position);
-            dir.y = 0;
-            vec3.normalize(dir, dir);
+            // Separazione da altri agenti (se flag attivo)
+            if ((agent.updateFlags & CrowdUpdateFlags.SEPARATION) !== 0) {
+                this.applySeparation(agent);
+            }
+        }
+    }
 
-            // Scala la velocità in base alla distanza (arrivo morbido)
-            const slowDownRadius = agent.radius * 4;
-            let speedScale = 1.0;
-            if (distToTarget < slowDownRadius) {
-                speedScale = distToTarget / slowDownRadius;
+    // Rimuove i corner troppo vicini alla posizione corrente (come navcat)
+    pruneCorners(agent, corners) {
+        const MIN_TARGET_DIST = 0.01;
+        let pruned = corners;
+
+        while (pruned.length > 1) {
+            const firstCorner = pruned[0];
+            const distance = vec3.distanceXZ(agent.position, firstCorner);
+
+            // Se il primo corner è abbastanza lontano, stop
+            if (distance > MIN_TARGET_DIST) {
+                break;
             }
 
-            vec3.scale(agent.desiredVelocity, dir, agent.maxSpeed * speedScale);
+            // Rimuovi il primo corner perché troppo vicino
+            pruned = pruned.slice(1);
+        }
+
+        return pruned;
+    }
+
+    // Steering dritto verso il primo corner (come navcat calcStraightSteerDirection)
+    calcStraightSteerDirection(agent, corners) {
+        // Rimuovi corner troppo vicini
+        const prunedCorners = this.pruneCorners(agent, corners);
+
+        if (prunedCorners.length === 0) {
+            vec3.set(agent.desiredVelocity, 0, 0, 0);
+            return;
+        }
+
+        const dir = vec3.create();
+        vec3.sub(dir, prunedCorners[0], agent.position);
+        dir.y = 0;
+        vec3.normalize(dir, dir);
+
+        vec3.scale(agent.desiredVelocity, dir, agent.maxSpeed);
+    }
+
+    // Steering morbido con anticipazione curve (come navcat calcSmoothSteerDirection)
+    calcSmoothSteerDirection(agent, corners) {
+        // Rimuovi corner troppo vicini
+        const prunedCorners = this.pruneCorners(agent, corners);
+
+        if (prunedCorners.length === 0) {
+            vec3.set(agent.desiredVelocity, 0, 0, 0);
+            return;
+        }
+
+        const p0 = prunedCorners[0];
+        const p1 = prunedCorners[Math.min(1, prunedCorners.length - 1)];
+
+        const dir0 = vec3.create();
+        const dir1 = vec3.create();
+
+        vec3.sub(dir0, p0, agent.position);
+        vec3.sub(dir1, p1, agent.position);
+        dir0.y = 0;
+        dir1.y = 0;
+
+        const len0 = vec3.length(dir0);
+        const len1 = vec3.length(dir1);
+
+        if (len1 > 0.001) {
+            vec3.scale(dir1, dir1, 1.0 / len1);
+        }
+
+        // Blend delle direzioni
+        const direction = vec3.create();
+        direction.x = dir0.x - dir1.x * len0 * 0.5;
+        direction.y = 0;
+        direction.z = dir0.z - dir1.z * len0 * 0.5;
+
+        vec3.normalize(direction, direction);
+        vec3.scale(agent.desiredVelocity, direction, agent.maxSpeed);
+    }
+
+    // Calcola distanza dal goal (come navcat getDistanceToGoal)
+    getDistanceToGoal(agent, range) {
+        // Usa il target del corridor invece dell'ultimo corner
+        const dist = vec3.distanceXZ(agent.position, agent.corridor.target);
+        return Math.min(range, dist);
+    }
+
+    // Applica separazione da altri agenti (come navcat updateSteering separation)
+    applySeparation(agent) {
+        const separationDist = agent.collisionQueryRange;
+        const invSeparationDist = 1.0 / separationDist;
+        const separationWeight = agent.separationWeight;
+
+        let w = 0;
+        const disp = vec3.create();
+
+        for (const nei of agent.neighbors) {
+            const diff = vec3.create();
+            vec3.sub(diff, agent.position, nei.position);
+            diff.y = 0;
+
+            const distSqr = diff.x * diff.x + diff.z * diff.z;
+            if (distSqr < 0.00001) continue;
+            if (distSqr > separationDist * separationDist) continue;
+
+            const dist = Math.sqrt(distSqr);
+            const weight = separationWeight * (1.0 - dist * invSeparationDist * (dist * invSeparationDist));
+
+            // disp += diff * (weight / dist)
+            vec3.scaleAndAdd(disp, disp, diff, weight / dist);
+            w += 1.0;
+        }
+
+        if (w > 0.0001) {
+            // Aggiusta velocità desiderata
+            vec3.scaleAndAdd(agent.desiredVelocity, agent.desiredVelocity, disp, 1.0 / w);
+
+            // Limita alla velocità desiderata
+            const speedSqr = agent.desiredVelocity.x * agent.desiredVelocity.x +
+                            agent.desiredVelocity.z * agent.desiredVelocity.z;
+            const desiredSqr = agent.desiredSpeed * agent.desiredSpeed;
+
+            if (speedSqr > desiredSqr && speedSqr > 0) {
+                const scale = Math.sqrt(desiredSqr / speedSqr);
+                vec3.scale(agent.desiredVelocity, agent.desiredVelocity, scale);
+            }
         }
     }
 
     updateVelocityPlanning() {
         for (const agent of this.agents.values()) {
+            if (agent.state !== AgentState.WALKING) continue;
+
             if (agent.targetState !== AgentTargetState.VALID) {
                 // Decelera se non c'è target
                 const speed = vec3.length(agent.velocity);
@@ -1150,16 +1971,22 @@ class Crowd {
                 continue;
             }
 
-            // Velocity obstacle sampling
-            agent.newVelocity = this.obstacleAvoidance.sampleVelocityAdaptive(
-                agent.position,
-                agent.radius,
-                agent.maxSpeed,
-                agent.velocity,
-                agent.desiredVelocity,
-                agent.neighbors,
-                agent.boundary.segments
-            );
+            // Obstacle avoidance (se flag attivo)
+            if ((agent.updateFlags & CrowdUpdateFlags.OBSTACLE_AVOIDANCE) !== 0) {
+                // Velocity obstacle sampling
+                agent.newVelocity = this.obstacleAvoidance.sampleVelocityAdaptive(
+                    agent.position,
+                    agent.radius,
+                    agent.maxSpeed,
+                    agent.velocity,
+                    agent.desiredVelocity,
+                    agent.neighbors,
+                    agent.boundary.segments
+                );
+            } else {
+                // Senza obstacle avoidance, usa direttamente la velocità desiderata
+                vec3.copy(agent.newVelocity, agent.desiredVelocity);
+            }
         }
     }
 
@@ -1192,50 +2019,235 @@ class Crowd {
     }
 
     handleCollisions() {
-        // Risolvi le sovrapposizioni tra agenti
+        // Risolvi le sovrapposizioni tra agenti (algoritmo navcat)
+        const COLLISION_RESOLVE_FACTOR = 0.7;
         const agents = Array.from(this.agents.values());
-        const iterations = 4;
+        const agentIds = agents.map(a => a.id);
 
-        for (let iter = 0; iter < iterations; iter++) {
+        for (let iter = 0; iter < 4; iter++) {
+            // Primo passaggio: calcola displacement per ogni agente
             for (let i = 0; i < agents.length; i++) {
-                const a1 = agents[i];
+                const agent = agents[i];
 
-                for (let j = i + 1; j < agents.length; j++) {
-                    const a2 = agents[j];
+                if (agent.state !== AgentState.WALKING) continue;
 
-                    const dx = a2.position.x - a1.position.x;
-                    const dz = a2.position.z - a1.position.z;
-                    const dist = Math.sqrt(dx * dx + dz * dz);
-                    const minDist = a1.radius + a2.radius;
+                vec3.set(agent.displacement, 0, 0, 0);
+                let w = 0;
 
-                    if (dist < minDist && dist > 0.0001) {
-                        const overlap = (minDist - dist) * 0.5;
-                        const nx = dx / dist;
-                        const nz = dz / dist;
+                for (const nei of agent.neighbors) {
+                    const diff = vec3.create();
+                    vec3.sub(diff, agent.position, nei.position);
+                    diff.y = 0; // Ignora asse Y
 
-                        a1.position.x -= nx * overlap;
-                        a1.position.z -= nz * overlap;
-                        a2.position.x += nx * overlap;
-                        a2.position.z += nz * overlap;
+                    const distSqr = diff.x * diff.x + diff.z * diff.z;
+                    const combinedRadius = agent.radius + nei.radius;
+
+                    if (distSqr > combinedRadius * combinedRadius) {
+                        continue;
                     }
+
+                    const dist = Math.sqrt(distSqr);
+                    let pen = combinedRadius - dist;
+
+                    if (dist < 0.0001) {
+                        // Agenti sovrapposti: scegli direzioni di separazione divergenti
+                        const idx0 = i;
+                        const idx1 = agentIds.indexOf(nei.id);
+
+                        if (idx0 > idx1) {
+                            vec3.set(diff, -agent.desiredVelocity.z, 0, agent.desiredVelocity.x);
+                        } else {
+                            vec3.set(diff, agent.desiredVelocity.z, 0, -agent.desiredVelocity.x);
+                        }
+                        pen = 0.01;
+                    } else {
+                        pen = (1.0 / dist) * (pen * 0.5) * COLLISION_RESOLVE_FACTOR;
+                    }
+
+                    // Accumula displacement
+                    vec3.scaleAndAdd(agent.displacement, agent.displacement, diff, pen);
+                    w += 1.0;
                 }
+
+                if (w > 0.0001) {
+                    vec3.scale(agent.displacement, agent.displacement, 1.0 / w);
+                }
+            }
+
+            // Secondo passaggio: applica displacement a tutti gli agenti
+            for (const agent of agents) {
+                if (agent.state !== AgentState.WALKING) continue;
+
+                vec3.add(agent.position, agent.position, agent.displacement);
             }
         }
     }
 
     constrainToNavMesh() {
         for (const agent of this.agents.values()) {
-            const poly = this.navMesh.findPolygonAtPosition(agent.position);
+            if (agent.targetState !== AgentTargetState.VALID &&
+                agent.targetState !== AgentTargetState.NONE) continue;
 
-            if (!poly) {
-                // Proietta sulla navmesh
-                const { point, polygon } = this.navMesh.projectToNavMesh(agent.position);
-                if (polygon) {
-                    vec3.copy(agent.position, point);
-                    agent.corridor.currentPoly = polygon;
+            // Implementazione ispirata a navcat moveAlongSurface
+            const result = this.moveAlongSurface(agent);
+
+            if (result.success) {
+                vec3.copy(agent.position, result.position);
+                agent.corridor.currentPoly = result.polygon;
+
+                // Aggiorna il corridor path con i poligoni visitati
+                if (result.visited.length > 0 && agent.corridor.path.length > 0) {
+                    agent.corridor.path = this.mergeCorridorPath(
+                        agent.corridor.path,
+                        result.visited
+                    );
                 }
             }
         }
+    }
+
+    // Versione semplificata di navcat moveAlongSurface
+    moveAlongSurface(agent) {
+        const result = {
+            success: false,
+            position: vec3.clone(agent.position),
+            polygon: agent.corridor.currentPoly,
+            visited: []
+        };
+
+        if (!agent.corridor.currentPoly) {
+            // Nessun poligono corrente, cerca il più vicino
+            const projected = this.navMesh.projectToNavMesh(agent.position);
+            if (projected.polygon) {
+                result.success = true;
+                result.position = projected.point;
+                result.polygon = projected.polygon;
+                result.visited = [projected.polygon.index];
+            }
+            return result;
+        }
+
+        const startPoly = agent.corridor.currentPoly;
+        const endPos = agent.position;
+
+        // Caso 1: La posizione è ancora nel poligono corrente
+        if (this.navMesh.isPointInPolygon(endPos, startPoly)) {
+            result.success = true;
+            result.position = vec3.clone(endPos);
+            result.polygon = startPoly;
+            result.visited = [startPoly.index];
+            return result;
+        }
+
+        // Caso 2: Cerca nei poligoni adiacenti
+        for (const neighborIdx of startPoly.neighbors) {
+            const neighbor = this.navMesh.polygons[neighborIdx];
+            if (this.navMesh.isPointInPolygon(endPos, neighbor)) {
+                result.success = true;
+                result.position = vec3.clone(endPos);
+                result.polygon = neighbor;
+                result.visited = [startPoly.index, neighborIdx];
+                return result;
+            }
+        }
+
+        // Caso 3: Cerca nei poligoni a 2 hop di distanza
+        for (const neighborIdx of startPoly.neighbors) {
+            const neighbor = this.navMesh.polygons[neighborIdx];
+            for (const neighbor2Idx of neighbor.neighbors) {
+                if (neighbor2Idx === startPoly.index) continue;
+                const neighbor2 = this.navMesh.polygons[neighbor2Idx];
+                if (this.navMesh.isPointInPolygon(endPos, neighbor2)) {
+                    result.success = true;
+                    result.position = vec3.clone(endPos);
+                    result.polygon = neighbor2;
+                    result.visited = [startPoly.index, neighborIdx, neighbor2Idx];
+                    return result;
+                }
+            }
+        }
+
+        // Caso 4: L'agente è uscito dalla navmesh - trova il punto più vicino
+        // sul bordo del poligono corrente o dei vicini
+        let bestPos = null;
+        let bestDist = Infinity;
+        let bestPoly = startPoly;
+        const visited = [startPoly.index];
+
+        // Cerca sul poligono corrente
+        const projectedCurrent = this.navMesh.projectToPolygon(endPos, startPoly);
+        const distCurrent = vec3.distanceXZ(endPos, projectedCurrent);
+        if (distCurrent < bestDist) {
+            bestDist = distCurrent;
+            bestPos = projectedCurrent;
+            bestPoly = startPoly;
+        }
+
+        // Cerca sui vicini
+        for (const neighborIdx of startPoly.neighbors) {
+            const neighbor = this.navMesh.polygons[neighborIdx];
+            const projected = this.navMesh.projectToPolygon(endPos, neighbor);
+            const dist = vec3.distanceXZ(endPos, projected);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestPos = projected;
+                bestPoly = neighbor;
+                visited.push(neighborIdx);
+            }
+        }
+
+        if (bestPos) {
+            result.success = true;
+            result.position = bestPos;
+            result.polygon = bestPoly;
+            result.visited = visited;
+        }
+
+        return result;
+    }
+
+    // Merge del corridor path con i poligoni visitati (ispirato a navcat mergeStartMoved)
+    mergeCorridorPath(currentPath, visited) {
+        if (visited.length === 0) return currentPath;
+
+        // Trova il poligono comune più lontano
+        let furthestPath = -1;
+        let furthestVisited = -1;
+
+        for (let i = currentPath.length - 1; i >= 0; i--) {
+            for (let j = visited.length - 1; j >= 0; j--) {
+                if (currentPath[i] === visited[j]) {
+                    furthestPath = i;
+                    furthestVisited = j;
+                    break;
+                }
+            }
+            if (furthestPath !== -1) break;
+        }
+
+        // Se non c'è intersezione, restituisci il path corrente
+        if (furthestPath === -1 || furthestVisited === -1) {
+            return currentPath;
+        }
+
+        // Concatena i path
+        const req = visited.length - furthestVisited;
+        const orig = Math.min(furthestPath + 1, currentPath.length);
+        const size = Math.max(0, currentPath.length - orig);
+
+        const newPath = [];
+
+        // Aggiungi i poligoni visitati (in ordine inverso)
+        for (let i = 0; i < req; i++) {
+            newPath[i] = visited[visited.length - 1 - i];
+        }
+
+        // Aggiungi il resto del path corrente
+        for (let i = 0; i < size; i++) {
+            newPath[req + i] = currentPath[orig + i];
+        }
+
+        return newPath;
     }
 }
 
@@ -1550,14 +2562,14 @@ class Application {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        if (e.button === 0) { // Left click - selezione
+        if (e.button === 0) { // Left click - selezione o spawn
             this.isDragging = true;
             this.dragStart = { x, y };
             this.selectionRect = { x, y, width: 0, height: 0 };
         } else if (e.button === 1) { // Middle click - pan
             this.isPanning = true;
             this.dragStart = { x, y };
-        } else if (e.button === 2) { // Right click
+        } else if (e.button === 2) { // Right click - muovi agenti selezionati
             const worldPos = this.renderer.screenToWorld(x, y);
 
             if (!this.navMesh) return;
@@ -1569,13 +2581,7 @@ class Application {
                 this.crowd.setTargetForSelected(worldPos);
                 this.updateStatus(`Target impostato per ${selectedAgents.length} agenti`);
             } else {
-                // Aggiungi un nuovo agente
-                const agent = this.crowd.addAgent(worldPos);
-                if (agent) {
-                    this.updateStatus(`Agente aggiunto (ID: ${agent.id})`);
-                } else {
-                    this.updateStatus('Impossibile aggiungere agente: posizione non valida');
-                }
+                this.updateStatus('Nessun agente selezionato da muovere');
             }
         }
     }
@@ -1611,19 +2617,11 @@ class Application {
             const width = Math.abs(x - this.dragStart.x);
             const height = Math.abs(y - this.dragStart.y);
 
-            // Deseleziona tutti se non è premuto shift
-            if (!e.shiftKey) {
-                for (const agent of this.crowd.agents.values()) {
-                    agent.selected = false;
-                }
-            }
-
-            let selectedCount = 0;
+            const worldPos = this.renderer.screenToWorld(x, y);
 
             // Se il drag è piccolo, considera come click singolo
             if (width < 5 && height < 5) {
                 // Cerca un agente sotto il cursore
-                const worldPos = this.renderer.screenToWorld(x, y);
                 let closestAgent = null;
                 let closestDist = Infinity;
 
@@ -1636,16 +2634,47 @@ class Application {
                 }
 
                 if (closestAgent) {
+                    // Click su un agente: seleziona/deseleziona
+                    if (!e.shiftKey) {
+                        for (const agent of this.crowd.agents.values()) {
+                            agent.selected = false;
+                        }
+                    }
                     closestAgent.selected = true;
-                    selectedCount = 1;
+                    this.updateStatus(`Agente ${closestAgent.id} selezionato`);
+                } else {
+                    // Click su spazio vuoto: spawn nuovo agente
+                    if (!this.navMesh) {
+                        this.updateStatus('Carica prima una NavMesh');
+                    } else {
+                        const agent = this.crowd.addAgent(worldPos);
+                        if (agent) {
+                            // Deseleziona tutti e seleziona il nuovo agente
+                            for (const a of this.crowd.agents.values()) {
+                                a.selected = false;
+                            }
+                            agent.selected = true;
+                            this.updateStatus(`Agente aggiunto (ID: ${agent.id})`);
+                        } else {
+                            this.updateStatus('Impossibile aggiungere agente: posizione non valida');
+                        }
+                    }
                 }
             } else {
                 // Selezione rettangolare
+                // Deseleziona tutti se non è premuto shift
+                if (!e.shiftKey) {
+                    for (const agent of this.crowd.agents.values()) {
+                        agent.selected = false;
+                    }
+                }
+
                 const minX = this.selectionRect.x;
                 const maxX = this.selectionRect.x + this.selectionRect.width;
                 const minY = this.selectionRect.y;
                 const maxY = this.selectionRect.y + this.selectionRect.height;
 
+                let selectedCount = 0;
                 for (const agent of this.crowd.agents.values()) {
                     const screenPos = this.renderer.worldToScreen(agent.position);
                     if (screenPos.x >= minX && screenPos.x <= maxX &&
@@ -1654,15 +2683,15 @@ class Application {
                         selectedCount++;
                     }
                 }
+
+                if (selectedCount > 0) {
+                    this.updateStatus(`${selectedCount} agenti selezionati`);
+                } else {
+                    this.updateStatus('Nessun agente selezionato');
+                }
             }
 
             this.selectionRect = null;
-
-            if (selectedCount > 0) {
-                this.updateStatus(`${selectedCount} agenti selezionati`);
-            } else {
-                this.updateStatus('Nessun agente selezionato');
-            }
         }
 
         this.isDragging = false;

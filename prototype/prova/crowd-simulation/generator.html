@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>BSP NavMesh: Sliced & Convex</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: #eee; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .controls { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+        .input-group { display: flex; flex-direction: column; }
+        label { font-size: 0.8rem; margin-bottom: 4px; color: #aaa; }
+        input { padding: 5px; border-radius: 4px; border: 1px solid #555; background: #222; color: white; width: 80px; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button.download { background: #28a745; }
+        canvas { background: #000; border: 2px solid #555; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .stats { margin-top: 10px; font-size: 0.9rem; color: #aaa; }
+    </style>
+</head>
+<body>
+
+    <h1>BSP NavMesh: Topological Slicing</h1>
+    <p style="color:#aaa; font-size:0.9rem; margin-top:-10px; margin-bottom: 20px;">Le stanze vengono tagliate per allineare i vertici con i corridoi (No T-Junctions).</p>
+
+    <div class="controls">
+        <div class="input-group"><label>Width</label><input type="number" id="mapWidth" value="100"></div>
+        <div class="input-group"><label>Height</label><input type="number" id="mapHeight" value="100"></div>
+        <div class="input-group"><label>Min Room</label><input type="number" id="minSize" value="15"></div>
+        <div class="input-group"><label>Wall Gap</label><input type="number" id="wallSize" value="2"></div>
+        <button onclick="generate()">Genera</button>
+        <button class="download" onclick="downloadJSON()">JSON</button>
+    </div>
+
+    <canvas id="preview" width="800" height="800"></canvas>
+    <div class="stats" id="stats">Ready</div>
+
+<script>
+class BSPNode {
+    constructor(x, y, w, h) {
+        this.x = x; this.y = y; this.w = w; this.h = h;
+        this.left = null; this.right = null;
+        this.room = null; 
+        this.corridors = [];
+    }
+}
+
+class NavMeshBSP {
+    constructor(width, height, minSize, wallSize) {
+        this.width = width;
+        this.height = height;
+        this.minSize = minSize;
+        this.wallSize = wallSize;
+        this.root = new BSPNode(-width/2, -height/2, width, height);
+        this.polygons = [];
+    }
+
+    generate() {
+        this.split(this.root);
+        this.createRooms(this.root);
+        this.createCorridors(this.root);
+        
+        this.polygons = [];
+        this.collectAndSlicePolygons(this.root); // Nuova logica di slicing
+        return this.polygons;
+    }
+
+    split(node) {
+        if (node.w < this.minSize * 2.5 || node.h < this.minSize * 2.5) return;
+        let splitH = Math.random() > 0.5;
+        if (node.w > node.h && node.w / node.h >= 1.25) splitH = false;
+        else if (node.h > node.w && node.h / node.w >= 1.25) splitH = true;
+
+        let max = (splitH ? node.h : node.w) - this.minSize;
+        let min = this.minSize;
+        if (max <= min) return;
+
+        let splitAt = Math.floor(Math.random() * (max - min + 1)) + min;
+
+        if (splitH) { 
+            node.left = new BSPNode(node.x, node.y, node.w, splitAt);
+            node.right = new BSPNode(node.x, node.y + splitAt, node.w, node.h - splitAt);
+        } else { 
+            node.left = new BSPNode(node.x, node.y, splitAt, node.h);
+            node.right = new BSPNode(node.x + splitAt, node.y, node.w - splitAt, node.h);
+        }
+        this.split(node.left);
+        this.split(node.right);
+    }
+
+    createRooms(node) {
+        if (node.left || node.right) {
+            if (node.left) this.createRooms(node.left);
+            if (node.right) this.createRooms(node.right);
+        } else {
+            let margin = this.wallSize;
+            let w = Math.max(1, node.w - margin * 2);
+            let h = Math.max(1, node.h - margin * 2);
+            
+            // Ogni stanza ora ha un array 'cuts' per memorizzare dove deve essere tagliata
+            node.room = { 
+                x: node.x + margin, 
+                y: node.y + margin, 
+                w: w, h: h,
+                cutsX: new Set(), // Tagli verticali (per corridoi sopra/sotto)
+                cutsY: new Set()  // Tagli orizzontali (per corridoi destra/sinistra)
+            };
+        }
+    }
+
+    createCorridors(node) {
+        if (!node.left || !node.right) return;
+        this.createCorridors(node.left);
+        this.createCorridors(node.right);
+
+        const isVerticalSplit = Math.abs((node.left.x + node.left.w) - node.right.x) < 0.1;
+        let splitCoord = isVerticalSplit ? node.right.x : node.right.y;
+        
+        let roomsL = this.findRoomsTouching(node.left, isVerticalSplit ? 'right' : 'bottom', splitCoord);
+        let roomsR = this.findRoomsTouching(node.right, isVerticalSplit ? 'left' : 'top', splitCoord);
+        
+        this.connectLists(node, roomsL, roomsR, isVerticalSplit ? 'horizontal' : 'vertical');
+    }
+
+    findRoomsTouching(node, side, coord) {
+        let results = [];
+        const tolerance = 1.0;
+        if (node.room) {
+            let r = node.room;
+            let touches = false;
+            if (side === 'right') touches = Math.abs((r.x + r.w) - (coord - this.wallSize)) < tolerance;
+            else if (side === 'left') touches = Math.abs(r.x - (coord + this.wallSize)) < tolerance;
+            else if (side === 'bottom') touches = Math.abs((r.y + r.h) - (coord - this.wallSize)) < tolerance;
+            else if (side === 'top') touches = Math.abs(r.y - (coord + this.wallSize)) < tolerance;
+            if (touches) results.push(r);
+        } else {
+            if (node.left) results = results.concat(this.findRoomsTouching(node.left, side, coord));
+            if (node.right) results = results.concat(this.findRoomsTouching(node.right, side, coord));
+        }
+        return results;
+    }
+
+    connectLists(node, listA, listB, orientation) {
+        for (let rA of listA) {
+            for (let rB of listB) {
+                let start, end;
+                if (orientation === 'horizontal') { // Split verticale, stanze affiancate orizzontalmente
+                    start = Math.max(rA.y, rB.y);
+                    end = Math.min(rA.y + rA.h, rB.y + rB.h);
+                } else { // Stanze impilate verticalmente
+                    start = Math.max(rA.x, rB.x);
+                    end = Math.min(rA.x + rA.w, rB.x + rB.w);
+                }
+
+                if (end > start) {
+                    let thickness = Math.min((end - start), this.minSize / 2);
+                    let center = (start + end) / 2;
+                    let cStart = center - thickness/2;
+                    let cEnd = center + thickness/2;
+                    
+                    let corridor = {};
+                    if (orientation === 'horizontal') {
+                        corridor.x = rA.x + rA.w;
+                        corridor.y = cStart;
+                        corridor.w = rB.x - (rA.x + rA.w);
+                        corridor.h = thickness;
+                        
+                        // REGISTRA I TAGLI SULLE STANZE
+                        // Stanza A (sinistra) va tagliata in Y a cStart e cEnd
+                        rA.cutsY.add(cStart);
+                        rA.cutsY.add(cEnd);
+                        // Stanza B (destra) va tagliata in Y a cStart e cEnd
+                        rB.cutsY.add(cStart);
+                        rB.cutsY.add(cEnd);
+
+                    } else {
+                        corridor.x = cStart;
+                        corridor.y = rA.y + rA.h;
+                        corridor.w = thickness;
+                        corridor.h = rB.y - (rA.y + rA.h);
+
+                        // REGISTRA I TAGLI
+                        rA.cutsX.add(cStart);
+                        rA.cutsX.add(cEnd);
+                        rB.cutsX.add(cStart);
+                        rB.cutsX.add(cEnd);
+                    }
+
+                    if (corridor.w > 0 && corridor.h > 0) {
+                        node.corridors.push(corridor);
+                    }
+                }
+            }
+        }
+    }
+
+    // --- NUOVA FUNZIONE: Applica i tagli e colleziona ---
+    collectAndSlicePolygons(node) {
+        if (node.room) {
+            // Applica i tagli alla stanza
+            let subRooms = this.sliceRoom(node.room);
+            subRooms.forEach(sr => this.polygons.push(sr));
+        }
+        
+        if (node.corridors) {
+            node.corridors.forEach(c => this.polygons.push(c));
+        }
+
+        if (node.left) this.collectAndSlicePolygons(node.left);
+        if (node.right) this.collectAndSlicePolygons(node.right);
+    }
+
+    sliceRoom(room) {
+        // Converte i Set in Array ordinati
+        // Filtriamo i tagli che sono fuori dai bordi (o coincidenti coi bordi)
+        let cutsX = Array.from(room.cutsX).sort((a,b) => a-b).filter(c => c > room.x + 0.1 && c < room.x + room.w - 0.1);
+        let cutsY = Array.from(room.cutsY).sort((a,b) => a-b).filter(c => c > room.y + 0.1 && c < room.y + room.h - 0.1);
+
+        // Se non ci sono tagli, ritorna la stanza originale
+        if (cutsX.length === 0 && cutsY.length === 0) return [room];
+
+        let result = [];
+
+        // Costruiamo la griglia di slicing
+        // Punti X: Start -> cut1 -> cut2 -> End
+        let xPoints = [room.x, ...cutsX, room.x + room.w];
+        let yPoints = [room.y, ...cutsY, room.y + room.h];
+
+        // Genera tutte le sottostanze
+        for (let i = 0; i < xPoints.length - 1; i++) {
+            for (let j = 0; j < yPoints.length - 1; j++) {
+                result.push({
+                    x: xPoints[i],
+                    y: yPoints[j],
+                    w: xPoints[i+1] - xPoints[i],
+                    h: yPoints[j+1] - yPoints[j]
+                });
+            }
+        }
+        return result;
+    }
+}
+
+/**
+ * VISUALIZZAZIONE
+ */
+const canvas = document.getElementById('preview');
+const ctx = canvas.getContext('2d');
+let generatedData = null;
+
+function generate() {
+    const w = parseInt(document.getElementById('mapWidth').value);
+    const h = parseInt(document.getElementById('mapHeight').value);
+    const minSize = parseInt(document.getElementById('minSize').value);
+    const wallSize = parseInt(document.getElementById('wallSize').value);
+
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    const bsp = new NavMeshBSP(w, h, minSize, wallSize);
+    const polys = bsp.generate();
+    draw(w, h, polys);
+    prepareJSONData(polys);
+}
+
+function draw(mapW, mapH, polys) {
+    const padding = 40;
+    const scale = Math.min((canvas.width - padding*2) / mapW, (canvas.height - padding*2) / mapH);
+    
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(canvas.width/2, canvas.height/2);
+    ctx.scale(scale, scale);
+
+    // Muri esterni
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1/scale;
+    ctx.strokeRect(-mapW/2, -mapH/2, mapW, mapH);
+
+    // Disegna Poligoni
+    ctx.lineWidth = 1/scale;
+    polys.forEach((p) => {
+        // Tinta verde acqua per vedere i segmenti
+        ctx.fillStyle = 'rgba(0, 255, 128, 0.15)';
+        ctx.strokeStyle = '#00ff80'; // Colore brillante per i bordi
+        
+        ctx.beginPath();
+        ctx.rect(p.x, p.y, p.w, p.h);
+        ctx.fill();
+        ctx.stroke();
+    });
+    
+    // Debug Vertex Points (piccoli puntini bianchi agli angoli per verificare l'allineamento)
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    const ps = 2/scale; 
+    polys.forEach(p => {
+        ctx.fillRect(p.x-ps/2, p.y-ps/2, ps, ps);
+        ctx.fillRect(p.x+p.w-ps/2, p.y-ps/2, ps, ps);
+        ctx.fillRect(p.x+p.w-ps/2, p.y+p.h-ps/2, ps, ps);
+        ctx.fillRect(p.x-ps/2, p.y+p.h-ps/2, ps, ps);
+    });
+
+    ctx.restore();
+    document.getElementById('stats').innerText = `Total Convex Polygons: ${polys.length}`;
+}
+
+function prepareJSONData(rects) {
+    const uniqueVertices = [];
+    const vertexMap = new Map(); 
+    const polygonsOut = [];
+
+    function getVertexIndex(x, z) {
+        // Arrotondamento aggressivo per saldare i vertici
+        const k = `${x.toFixed(3)},0,${z.toFixed(3)}`;
+        if (vertexMap.has(k)) return vertexMap.get(k);
+        const idx = uniqueVertices.length;
+        uniqueVertices.push([parseFloat(x.toFixed(3)), 0, parseFloat(z.toFixed(3))]);
+        vertexMap.set(k, idx);
+        return idx;
+    }
+
+    rects.forEach(r => {
+        // TL -> TR -> BR -> BL
+        const v1 = getVertexIndex(r.x, r.y);             
+        const v2 = getVertexIndex(r.x + r.w, r.y);       
+        const v3 = getVertexIndex(r.x + r.w, r.y + r.h); 
+        const v4 = getVertexIndex(r.x, r.y + r.h);       
+        polygonsOut.push({ vertices: [v1, v2, v3, v4], neighbors: [] });
+    });
+
+    generatedData = { vertices: uniqueVertices, polygons: polygonsOut };
+}
+
+function downloadJSON() {
+    if (!generatedData) return;
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(generatedData, null, 2));
+    const a = document.createElement('a');
+    a.href = dataStr; a.download = "navmesh_sliced.json";
+    document.body.appendChild(a); a.click(); a.remove();
+}
+
+window.onload = generate;
+</script>
+</body>
+</html>
