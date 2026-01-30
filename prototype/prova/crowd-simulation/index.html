@@ -109,6 +109,16 @@
     </div>
     <div class="status" id="status">Carica una navmesh per iniziare</div>
 
-    <script src="app.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "mathcat": "./navcat/node_modules/mathcat/dist/index.js",
+            "navcat": "./navcat/dist/index.js",
+            "navcat/blocks": "./navcat/dist/blocks.js",
+            "navcat/three": "./navcat/dist/three.js"
+        }
+    }
+    </script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

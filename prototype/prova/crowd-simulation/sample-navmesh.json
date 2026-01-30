@@ -26,18 +26,18 @@
     [30, 0, 12]
   ],
   "polygons": [
-    { "vertices": [0, 1, 5, 4], "neighbors": [] },
-    { "vertices": [1, 2, 6, 5], "neighbors": [] },
-    { "vertices": [2, 3, 7, 6], "neighbors": [] },
-    { "vertices": [4, 5, 9, 8], "neighbors": [] },
-    { "vertices": [5, 6, 10, 9], "neighbors": [] },
-    { "vertices": [6, 7, 11, 10], "neighbors": [] },
-    { "vertices": [8, 9, 13, 12], "neighbors": [] },
-    { "vertices": [9, 10, 14, 13], "neighbors": [] },
-    { "vertices": [10, 11, 15, 14], "neighbors": [] },
-    { "vertices": [7, 16, 19, 11], "neighbors": [] },
-    { "vertices": [16, 17, 18, 19], "neighbors": [] },
-    { "vertices": [17, 20, 23, 18], "neighbors": [] },
-    { "vertices": [20, 21, 22, 23], "neighbors": [] }
+    { "vertices": [0, 4, 5, 1], "neighbors": [] },
+    { "vertices": [1, 5, 6, 2], "neighbors": [] },
+    { "vertices": [2, 6, 7, 3], "neighbors": [] },
+    { "vertices": [4, 8, 9, 5], "neighbors": [] },
+    { "vertices": [5, 9, 10, 6], "neighbors": [] },
+    { "vertices": [6, 10, 11, 7], "neighbors": [] },
+    { "vertices": [8, 12, 13, 9], "neighbors": [] },
+    { "vertices": [9, 13, 14, 10], "neighbors": [] },
+    { "vertices": [10, 14, 15, 11], "neighbors": [] },
+    { "vertices": [7, 11, 19, 16], "neighbors": [] },
+    { "vertices": [16, 19, 18, 17], "neighbors": [] },
+    { "vertices": [17, 18, 23, 20], "neighbors": [] },
+    { "vertices": [20, 23, 22, 21], "neighbors": [] }
   ]
 }

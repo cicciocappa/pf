@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower Attack — Prototipo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+        #game-container {
+            width: 100%;
+            height: 100%;
+        }
+        #game-container canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+
+    <!-- Pixi.js v7 -->
+    <script src="https://pixijs.download/v7.3.2/pixi.min.js"></script>
+
+    <!-- Import map per navcat e mathcat -->
+    <script type="importmap">
+    {
+        "imports": {
+            "mathcat": "../navcat/node_modules/mathcat/dist/index.js",
+            "navcat": "../navcat/dist/index.js",
+            "navcat/blocks": "../navcat/dist/blocks.js"
+        }
+    }
+    </script>
+
+    <!-- Entry point -->
+    <script type="module" src="src/main.js"></script>
+</body>
+</html>
