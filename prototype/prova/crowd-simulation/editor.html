@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavMesh Editor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* === TOOLBAR === */
+        .toolbar {
+            background: #16213e;
+            padding: 8px 12px;
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+            flex-wrap: wrap;
+            min-height: 44px;
+        }
+        .toolbar button {
+            background: #0f3460;
+            color: #eee;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .toolbar button:hover { background: #e94560; }
+        .toolbar button.active {
+            background: #e94560;
+            box-shadow: 0 0 8px rgba(233, 69, 96, 0.5);
+        }
+        .toolbar .separator {
+            width: 1px;
+            height: 28px;
+            background: #0f3460;
+            flex-shrink: 0;
+        }
+        .toolbar .info {
+            margin-left: auto;
+            font-size: 11px;
+            color: #888;
+            white-space: nowrap;
+        }
+        .toolbar input[type="file"] { display: none; }
+
+        /* === MAIN LAYOUT === */
+        .main-area {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* === TEMPLATE PANEL (left) === */
+        .template-panel {
+            width: 160px;
+            background: #16213e;
+            border-right: 1px solid #0f3460;
+            overflow-y: auto;
+            display: none;
+            padding: 8px;
+        }
+        .template-panel h4 {
+            color: #a855f7;
+            font-size: 11px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .tmpl-btn {
+            display: block;
+            width: 100%;
+            background: #0f3460;
+            color: #ccc;
+            border: none;
+            padding: 5px 8px;
+            margin-bottom: 3px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            text-align: left;
+            transition: background 0.15s;
+        }
+        .tmpl-btn:hover { background: #a855f7; color: #fff; }
+        .tmpl-btn.active { background: #a855f7; color: #fff; }
+
+        /* === CANVAS === */
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        /* === PROPERTIES PANEL (right) === */
+        .properties-panel {
+            width: 200px;
+            background: #16213e;
+            border-left: 1px solid #0f3460;
+            padding: 10px;
+            overflow-y: auto;
+        }
+        .properties-panel h4 {
+            color: #e94560;
+            font-size: 11px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .prop-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-size: 11px;
+        }
+        .prop-label { color: #888; }
+        .prop-value { color: #ddd; font-weight: 500; }
+        .prop-hint { color: #555; font-size: 11px; font-style: italic; }
+
+        /* === STATUS BAR === */
+        .status {
+            background: #16213e;
+            padding: 6px 16px;
+            font-size: 11px;
+            border-top: 1px solid #0f3460;
+            color: #aaa;
+        }
+
+        /* === HELP OVERLAY === */
+        .help {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(22, 33, 62, 0.92);
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 10px;
+            line-height: 1.6;
+            max-width: 280px;
+            pointer-events: none;
+        }
+        .help h4 { margin-bottom: 6px; color: #e94560; font-size: 11px; }
+        .help kbd {
+            background: #0f3460;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 9px;
+        }
+    </style>
+</head>
+<body>
+    <!-- TOOLBAR -->
+    <div class="toolbar">
+        <button data-tool="boundary" title="Boundary (B)">Boundary (B)</button>
+        <button data-tool="building" title="Building (F)">Building (F)</button>
+        <button data-tool="wall" title="Wall (W)">Wall (W)</button>
+        <button data-tool="obstacle" title="Obstacle (O)">Obstacle (O)</button>
+        <button data-tool="offmesh" title="OffMesh (L)">OffMesh (L)</button>
+        <button data-tool="select" title="Select (S)">Select (S)</button>
+        <button data-tool="merge" title="Merge (M)">Merge (M)</button>
+        <button data-tool="split" title="Split (X)">Split (X)</button>
+
+        <div class="separator"></div>
+
+        <button id="toggleSnap" title="Toggle vertex snap (G)">Snap: ON</button>
+        <button id="toggleEdgeSnap" title="Toggle edge snap">Edge Snap: ON</button>
+        <button id="toggleGridSnap" title="Toggle grid snap">Grid: OFF</button>
+
+        <div class="separator"></div>
+
+        <button id="exportJSON">Export JSON</button>
+        <button id="openSimulator">Open Simulator</button>
+
+        <div class="separator"></div>
+
+        <button id="saveProject">Save</button>
+        <label>
+            <button id="loadProject">Load</button>
+            <input type="file" id="projectFileInput" accept=".json">
+        </label>
+        <button id="clearAll" title="Clear all">Reset</button>
+
+        <div class="info">
+            Bd:<span id="boundaryCount">0</span>
+            Bldg:<span id="buildingCount">0</span>
+            W:<span id="wallCount">0</span>
+            Obs:<span id="obstacleCount">0</span>
+            Tri:<span id="triCount">0</span>
+            Links:<span id="linkCount">0</span>
+        </div>
+    </div>
+
+    <!-- MAIN AREA -->
+    <div class="main-area">
+        <!-- Template Panel (left, visible only with Building tool) -->
+        <div class="template-panel" id="templatePanel">
+            <h4>Templates</h4>
+            <div id="templateList"></div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+
+            <div class="help">
+                <h4>Controls</h4>
+                <div><kbd>B</kbd> Boundary <kbd>F</kbd> Building <kbd>W</kbd> Wall <kbd>O</kbd> Obstacle</div>
+                <div><kbd>L</kbd> OffMesh <kbd>S</kbd> Select <kbd>M</kbd> Merge <kbd>X</kbd> Split</div>
+                <div><kbd>G</kbd> Toggle snap | <kbd>Esc</kbd> Cancel | <kbd>Ctrl+Z</kbd> Undo</div>
+                <div><b>Building:</b> Wheel=scale, Shift+Wheel=rotate, X/Y=constrain, 3-9=ngon</div>
+                <div><b>Wall:</b> Wheel=thickness, Ctrl+Wheel=segment, Enter/RClick=complete</div>
+                <div><b>Obstacle:</b> Shift+drag=rectangle</div>
+                <div><b>Navigation:</b> Middle-click=pan, Wheel=zoom</div>
+            </div>
+        </div>
+
+        <!-- Properties Panel (right) -->
+        <div class="properties-panel">
+            <h4>Properties</h4>
+            <div id="propertiesContent">
+                <p class="prop-hint">No selection</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATUS BAR -->
+    <div class="status" id="status">Press B to draw a boundary, then F for buildings, W for walls</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "delaunator": "https://esm.sh/delaunator",
+            "constrainautor": "https://esm.sh/@kninnug/constrainautor"
+        }
+    }
+    </script>
+    <script type="module" src="editor.js"></script>
+</body>
+</html>
