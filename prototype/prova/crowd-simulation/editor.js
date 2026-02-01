@@ -415,8 +415,13 @@ class NavMeshEditor {
     // Export
     // ========================================
     buildExportJSON() {
-        if (!this.navmeshData) return null;
-        return exportNavMesh(this.navmeshData, this.editorData.offMeshLinks);
+        const narrowWidth = parseFloat(document.getElementById('narrowWidth')?.value) || 0;
+        let navmeshData = this.navmeshData;
+        if (narrowWidth > 0) {
+            navmeshData = buildNavMesh(this.editorData, Delaunator, Constrainautor, narrowWidth);
+        }
+        if (!navmeshData) return null;
+        return exportNavMesh(navmeshData, this.editorData.offMeshLinks);
     }
 
     exportJSON() {

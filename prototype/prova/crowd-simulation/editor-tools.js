@@ -273,8 +273,8 @@ export class BuildingTool extends Tool {
         this.name = 'building';
         this.position = { x: 0, y: 0 };
         this.rotation = 0;
-        this.scaleX = 50;
-        this.scaleY = 50;
+        this.scaleX = 5;
+        this.scaleY = 5;
         this.sides = 4;
         this.currentTemplateId = 'ngon';
         this.scaleConstraint = null;
@@ -288,8 +288,8 @@ export class BuildingTool extends Tool {
 
     _resetTransform() {
         this.rotation = 0;
-        this.scaleX = 50;
-        this.scaleY = 50;
+        this.scaleX = 5;
+        this.scaleY = 5;
         this.scaleConstraint = null;
         this.edgeSnapInfo = null;
         this.alignedEdgeIndex = 0;
@@ -406,12 +406,12 @@ export class BuildingTool extends Tool {
             this.rotation += (deltaY > 0 ? -1 : 1) * Math.PI / 180;
         } else {
             if (this.scaleConstraint === 'x') {
-                this.scaleX = Math.max(10, this.scaleX * scaleFactor);
+                this.scaleX = Math.max(1, this.scaleX * scaleFactor);
             } else if (this.scaleConstraint === 'y') {
-                this.scaleY = Math.max(10, this.scaleY * scaleFactor);
+                this.scaleY = Math.max(1, this.scaleY * scaleFactor);
             } else {
-                this.scaleX = Math.max(10, this.scaleX * scaleFactor);
-                this.scaleY = Math.max(10, this.scaleY * scaleFactor);
+                this.scaleX = Math.max(1, this.scaleX * scaleFactor);
+                this.scaleY = Math.max(1, this.scaleY * scaleFactor);
             }
         }
         event.preventDefault();
@@ -468,7 +468,7 @@ export class BuildingTool extends Tool {
 
     getStatusText() {
         const tmpl = this.currentTemplateId === 'ngon' ? `${this.sides}-gon` : this.currentTemplateId;
-        return `Building: ${tmpl} | Scale ${Math.round(this.scaleX)}x${Math.round(this.scaleY)} | Rot ${Math.round(this.rotation * 180 / Math.PI)}deg | Wheel: scale, Shift+Wheel: rotate`;
+        return `Building: ${tmpl} | Scale ${this.scaleX.toFixed(1)}x${this.scaleY.toFixed(1)}m | Rot ${Math.round(this.rotation * 180 / Math.PI)}deg | Wheel: scale, Shift+Wheel: rotate`;
     }
 
     getCursor() { return 'crosshair'; }
@@ -483,8 +483,8 @@ export class WallTool extends Tool {
         this.name = 'wall';
         this.points = [];
         this.previewPoint = null;
-        this.thickness = 30;
-        this.maxSegmentLength = 50;
+        this.thickness = 2;
+        this.maxSegmentLength = 3;
         this.startSnapInfo = null;
         this.endSnapInfo = null;
         this.currentSnapInfo = null;
@@ -544,12 +544,12 @@ export class WallTool extends Tool {
 
     onWheel(x, y, deltaY, event) {
         if (event.ctrlKey) {
-            const delta = deltaY > 0 ? -5 : 5;
-            this.maxSegmentLength = Math.max(10, Math.min(200, this.maxSegmentLength + delta));
+            const delta = deltaY > 0 ? -0.5 : 0.5;
+            this.maxSegmentLength = Math.max(1, Math.min(20, this.maxSegmentLength + delta));
             event.preventDefault();
         } else {
-            const delta = deltaY > 0 ? -2 : 2;
-            this.thickness = Math.max(2, Math.min(100, this.thickness + delta));
+            const delta = deltaY > 0 ? -0.2 : 0.2;
+            this.thickness = Math.max(0.2, Math.min(10, this.thickness + delta));
         }
     }
 
@@ -697,9 +697,9 @@ export class WallTool extends Tool {
 
     getStatusText() {
         if (this.points.length === 0) {
-            return `Wall: Thickness ${this.thickness}px | Segment ${this.maxSegmentLength}px | Click to start`;
+            return `Wall: Thickness ${this.thickness.toFixed(1)}m | Segment ${this.maxSegmentLength.toFixed(1)}m | Click to start`;
         }
-        return `Wall: ${this.points.length} points | Thickness ${this.thickness}px | Right-click/Enter to complete`;
+        return `Wall: ${this.points.length} points | Thickness ${this.thickness.toFixed(1)}m | Right-click/Enter to complete`;
     }
 
     getCursor() { return 'crosshair'; }

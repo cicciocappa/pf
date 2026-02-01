@@ -6,6 +6,81 @@
 import { pointInPolygonArray, pointInPolygon, isConvexIndices, findSharedEdge, mergePolygons } from './editor-geometry.js';
 
 /**
+ * computeOffsetPolygon - Computes an outward-offset polygon for a convex polygon.
+ * @param {Array} vertices - array of {x,y} objects
+ * @param {number} distance - offset distance (positive = outward)
+ * @returns {Array|null} array of [x,y] arrays, or null if degenerate
+ */
+function computeOffsetPolygon(vertices, distance) {
+    const n = vertices.length;
+    if (n < 3) return null;
+
+    // Compute signed area to determine winding
+    let signedArea = 0;
+    for (let i = 0; i < n; i++) {
+        const curr = vertices[i];
+        const next = vertices[(i + 1) % n];
+        signedArea += curr.x * next.y - next.x * curr.y;
+    }
+    signedArea /= 2;
+    const isCCW = signedArea > 0;
+
+    // For each edge, compute offset line (point + direction)
+    const offsetLines = [];
+    for (let i = 0; i < n; i++) {
+        const curr = vertices[i];
+        const next = vertices[(i + 1) % n];
+        const dx = next.x - curr.x;
+        const dy = next.y - curr.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-10) continue;
+
+        // Outward normal
+        let nx, ny;
+        if (isCCW) {
+            nx = dy / len;
+            ny = -dx / len;
+        } else {
+            nx = -dy / len;
+            ny = dx / len;
+        }
+
+        // Offset point on the line
+        const ox = curr.x + distance * nx;
+        const oy = curr.y + distance * ny;
+
+        offsetLines.push({ ox, oy, dx, dy });
+    }
+
+    if (offsetLines.length < 3) return null;
+
+    // Intersect consecutive offset lines to get new vertices
+    const result = [];
+    const m = offsetLines.length;
+    for (let i = 0; i < m; i++) {
+        const L1 = offsetLines[i];
+        const L2 = offsetLines[(i + 1) % m];
+
+        // L1: P1 + t * D1, L2: P2 + s * D2
+        // Solve: P1 + t*D1 = P2 + s*D2
+        const det = L1.dx * L2.dy - L1.dy * L2.dx;
+        if (Math.abs(det) < 1e-10) {
+            // Parallel lines - use midpoint of the two offset points
+            result.push([(L1.ox + L2.ox) / 2, (L1.oy + L2.oy) / 2]);
+            continue;
+        }
+
+        const dpx = L2.ox - L1.ox;
+        const dpy = L2.oy - L1.oy;
+        const t = (dpx * L2.dy - dpy * L2.dx) / det;
+
+        result.push([L1.ox + t * L1.dx, L1.oy + t * L1.dy]);
+    }
+
+    return result.length >= 3 ? result : null;
+}
+
+/**
  * buildNavMesh - Costruisce la navmesh CDT con triangolazione parziale
  *
  * 1. Raccolta vertici unificati: boundary → buildings → wall units → obstacles
@@ -13,8 +88,11 @@ import { pointInPolygonArray, pointInPolygon, isConvexIndices, findSharedEdge, m
  * 3. Delaunator + Constrainautor
  * 4. Filtro triangoli terreno (centroide inside boundary, outside buildings/walls/obstacles)
  * 5. Riassemblaggio: triangoli terreno + poligoni building + quad wall_unit
+ *
+ * @param {number} narrowWidth - if > 0, insert offset outlines as CDT constraints
+ *   and classify terrain triangles between obstacle and outline as terrain_narrow
  */
-export function buildNavMesh(editorData, Delaunator, Constrainautor) {
+export function buildNavMesh(editorData, Delaunator, Constrainautor, narrowWidth = 0) {
     if (editorData.boundaries.length === 0) return null;
 
     const allPoints = [];
@@ -80,6 +158,57 @@ export function buildNavMesh(editorData, Delaunator, Constrainautor) {
             edgeConstraints.push([oStart + i, oStart + (i + 1) % oCount]);
         }
     });
+
+    // --- 4b. Offset outlines for narrow zones ---
+    const narrowOutlines = [];
+    if (narrowWidth > 0) {
+        // Buildings
+        editorData.buildings.forEach(bldg => {
+            const offset = computeOffsetPolygon(bldg.vertices, narrowWidth);
+            if (!offset) return;
+            narrowOutlines.push(offset);
+            const oStart = allPoints.length;
+            for (const p of offset) {
+                allPoints.push([p[0], p[1]]);
+            }
+            const oCount = offset.length;
+            for (let i = 0; i < oCount; i++) {
+                edgeConstraints.push([oStart + i, oStart + (i + 1) % oCount]);
+            }
+        });
+
+        // Wall units
+        editorData.walls.forEach(wall => {
+            for (const unit of wall.units) {
+                const offset = computeOffsetPolygon(unit.vertices, narrowWidth);
+                if (!offset) return;
+                narrowOutlines.push(offset);
+                const oStart = allPoints.length;
+                for (const p of offset) {
+                    allPoints.push([p[0], p[1]]);
+                }
+                const oCount = offset.length;
+                for (let i = 0; i < oCount; i++) {
+                    edgeConstraints.push([oStart + i, oStart + (i + 1) % oCount]);
+                }
+            }
+        });
+
+        // Obstacles
+        editorData.obstacles.forEach(obs => {
+            const offset = computeOffsetPolygon(obs.vertices, narrowWidth);
+            if (!offset) return;
+            narrowOutlines.push(offset);
+            const oStart = allPoints.length;
+            for (const p of offset) {
+                allPoints.push([p[0], p[1]]);
+            }
+            const oCount = offset.length;
+            for (let i = 0; i < oCount; i++) {
+                edgeConstraints.push([oStart + i, oStart + (i + 1) % oCount]);
+            }
+        });
+    }
 
     if (allPoints.length < 3) return null;
 
@@ -358,9 +487,20 @@ export function buildNavMesh(editorData, Delaunator, Constrainautor) {
         }
         if (inObstacle) continue;
 
+        // Classify as terrain_narrow if centroid falls inside any offset outline
+        let terrainType = 'terrain';
+        if (narrowWidth > 0 && narrowOutlines.length > 0) {
+            for (const outline of narrowOutlines) {
+                if (pointInPolygonArray(cx, cy, outline)) {
+                    terrainType = 'terrain_narrow';
+                    break;
+                }
+            }
+        }
+
         polygons.push({
             indices: [i0, i1, i2],
-            type: 'terrain'
+            type: terrainType
         });
     }
 
@@ -415,7 +555,7 @@ export function buildNavMesh(editorData, Delaunator, Constrainautor) {
         // degenerate zero-area triangles. E.g. for square [A,B,C,D] with W1,W2
         // on edge D→A, fanning from D or A creates [D,W1,W2] with zero area.
         // Fanning from B or C avoids this.
-        let hubBldgIdx = 0;
+        let hubBldgIdx = -1;
         for (let i = 0; i < n; i++) {
             const edgeFrom = i;                    // edge starting at vertex i
             const edgeTo = (i - 1 + n) % n;       // edge ending at vertex i
@@ -426,18 +566,46 @@ export function buildNavMesh(editorData, Delaunator, Constrainautor) {
         }
 
         // Fan-triangulate the expanded polygon in CW order.
-        // Reverse CCW→CW, then rotate so the hub vertex is at position 0.
+        // Reverse CCW→CW first.
         const reversed = expandedIndices.slice().reverse();
-        const hubCdtIdx = bldgIndices[hubBldgIdx];
-        const hubPos = reversed.indexOf(hubCdtIdx);
-        const rotated = [...reversed.slice(hubPos), ...reversed.slice(0, hubPos)];
 
-        for (let i = 1; i < rotated.length - 1; i++) {
-            polygons.push({
-                indices: [rotated[0], rotated[i], rotated[i + 1]],
-                type: 'building',
-                sourceId: bldg.id
-            });
+        if (hubBldgIdx >= 0) {
+            // Safe hub found: rotate so hub is at position 0, fan from it.
+            const hubCdtIdx = bldgIndices[hubBldgIdx];
+            const hubPos = reversed.indexOf(hubCdtIdx);
+            const rotated = [...reversed.slice(hubPos), ...reversed.slice(0, hubPos)];
+
+            for (let i = 1; i < rotated.length - 1; i++) {
+                polygons.push({
+                    indices: [rotated[0], rotated[i], rotated[i + 1]],
+                    type: 'building',
+                    sourceId: bldg.id
+                });
+            }
+        } else {
+            // All building vertices are adjacent to connection edges.
+            // Fan from the polygon centroid to avoid collinear triangles.
+            let cx = 0, cy = 0;
+            for (const idx of reversed) {
+                cx += uniquePoints[idx][0];
+                cy += uniquePoints[idx][1];
+            }
+            cx /= reversed.length;
+            cy /= reversed.length;
+
+            // Add centroid as a new vertex
+            const centroidIdx = uniquePoints.length;
+            uniquePoints.push([cx, cy]);
+
+            for (let i = 0; i < reversed.length; i++) {
+                const a = reversed[i];
+                const b = reversed[(i + 1) % reversed.length];
+                polygons.push({
+                    indices: [centroidIdx, a, b],
+                    type: 'building',
+                    sourceId: bldg.id
+                });
+            }
         }
     });
 
@@ -649,9 +817,12 @@ function _splitPolyAtEdge(poly, edgeVA, edgeVB, midIdx) {
 export function exportNavMesh(navmeshData, offMeshLinks) {
     if (!navmeshData || navmeshData.polygons.length === 0) return null;
 
+    const vertices = navmeshData.vertices;
+    const polygons = navmeshData.polygons;
+
     // 1. Compact vertices (remove unused, remap indices)
     const usedVertices = new Set();
-    for (const poly of navmeshData.polygons) {
+    for (const poly of polygons) {
         for (const idx of poly.indices) {
             usedVertices.add(idx);
         }
@@ -662,13 +833,13 @@ export function exportNavMesh(navmeshData, offMeshLinks) {
     let newIdx = 0;
     for (const vi of [...usedVertices].sort((a, b) => a - b)) {
         vertexMap.set(vi, newIdx++);
-        const p = navmeshData.vertices[vi];
+        const p = vertices[vi];
         // Convert 2D to 3D: [x, y] -> [x, 0, y]
         outVertices.push([p[0], 0, p[1]]);
     }
 
     // 2. Remap polygon indices
-    const outPolygons = navmeshData.polygons.map(poly => {
+    const outPolygons = polygons.map(poly => {
         const result = {
             vertices: poly.indices.map(i => vertexMap.get(i)),
             type: poly.type

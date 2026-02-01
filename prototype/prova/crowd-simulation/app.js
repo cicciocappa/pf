@@ -163,6 +163,19 @@ class CrowdSimulationApp {
             }
         };
 
+        // --- Query Filter per agenti grandi ---
+        // Esclude sia i poligoni disabilitati sia quelli con area === 1 (terrain_narrow)
+        this.largeAgentQueryFilter = {
+            disabledFlags: this.disabledPolygons,
+            getCost: DEFAULT_QUERY_FILTER.getCost,
+            passFilter(nodeRef, navMesh) {
+                const node = getNodeByRef(navMesh, nodeRef);
+                if (this.disabledFlags.has(node.flags - 1)) return false;
+                if (node.area === 1) return false; // exclude narrow zones
+                return true;
+            }
+        };
+
         // --- Selezione agenti ---
         // Set di agentId (stringhe) degli agenti attualmente selezionati.
         // Gli agenti selezionati sono evidenziati in rosso e ricevono i comandi
@@ -351,11 +364,11 @@ class CrowdSimulationApp {
         // con il bitmask AND del DEFAULT_QUERY_FILTER.
         // area: 0 = area di default (costo di attraversamento standard)
         const externalPolygons = json.polygons.map((p, i) => {
-            console.log(`Polygon ${i}: vertices = [${p.vertices.join(', ')}]`);
+            console.log(`Polygon ${i}: vertices = [${p.vertices.join(', ')}], type = ${p.type}`);
             return {
                 vertices: [...p.vertices], // copia dell'array di indici dei vertici
                 flags: i + 1,              // flag univoco per il queryFilter
-                area: 0                    // area type (0 = default, costo uniforme)
+                area: (p.type === 'terrain_narrow') ? 1 : 0  // area 1 = narrow zone
             };
         });
 
@@ -609,7 +622,7 @@ class CrowdSimulationApp {
      * @param {Object} worldPos - Posizione nel mondo {x, y} dove x→X e y→Z
      * @returns {string|null} ID dell'agente creato, o null se la posizione non è valida
      */
-    addAgent(worldPos) {
+    addAgent(worldPos, large = false) {
         if (!this.navMesh || !this.crowdSim) {
             console.log('NavMesh or Crowd not ready');
             return null;
@@ -642,11 +655,11 @@ class CrowdSimulationApp {
 
         // Parametri di navigazione dell'agente
         const agentParams = {
-            radius: 0.4,              // raggio fisico dell'agente (per collisioni)
-            height: 1.8,              // altezza dell'agente
+            radius: large ? 1.6 : 0.4, // raggio fisico (4x se large)
+            height: large ? 3.6 : 1.8, // altezza (2x se large)
             maxAcceleration: 15.0,    // accelerazione massima (unità/s²)
-            maxSpeed: 3.5,            // velocità massima (unità/s)
-            collisionQueryRange: 2.5, // raggio di rilevamento altri agenti
+            maxSpeed: large ? 2.0 : 3.5, // velocità massima (più lento se large)
+            collisionQueryRange: large ? 5.0 : 2.5, // raggio di rilevamento altri agenti
             pathOptimizationRange: 12.0, // raggio per ottimizzazione locale del percorso
 
             // Peso della forza di separazione (0-1): quanto gli agenti si respingono
@@ -664,8 +677,8 @@ class CrowdSimulationApp {
                         crowd.CrowdUpdateFlags.OPTIMIZE_VIS |
                         crowd.CrowdUpdateFlags.OPTIMIZE_TOPO,
 
-            // Usa il queryFilter personalizzato per rispettare i poligoni disabilitati
-            queryFilter: this.queryFilter,
+            // Usa il queryFilter appropriato: large agents evitano le narrow zones
+            queryFilter: large ? this.largeAgentQueryFilter : this.queryFilter,
 
             // Parametri predefiniti per l'obstacle avoidance tra agenti
             obstacleAvoidance: crowd.DEFAULT_OBSTACLE_AVOIDANCE_PARAMS,
@@ -983,7 +996,7 @@ class CrowdSimulationApp {
                 this.moveAgentsToTarget(worldPos);
             } else {
                 // Se nessun agente è selezionato: piazza un nuovo agente
-                this.addAgent(worldPos);
+                this.addAgent(worldPos, e.shiftKey);
             }
         }
 
@@ -1059,7 +1072,7 @@ class CrowdSimulationApp {
                 // Piazza un nuovo agente se non c'è già un agente nella posizione
                 const worldPos = this.screenToWorld(this.selectionRect.x1, this.selectionRect.y1);
                 if (!this.getAgentAtPosition(worldPos)) {
-                    this.addAgent(worldPos);
+                    this.addAgent(worldPos, e.shiftKey);
                 }
             }
         }
@@ -1207,6 +1220,9 @@ class CrowdSimulationApp {
             } else if (polyType === 'wall_unit') {
                 // Muro attraversabile (distrutto) - arancione chiaro
                 ctx.fillStyle = 'rgba(251, 146, 60, 0.2)';
+            } else if (polyType === 'terrain_narrow') {
+                // Zona narrow (vicina a ostacoli) - ambra/giallastro
+                ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
             } else {
                 // Terreno normale
                 ctx.fillStyle = `hsla(${200 + (i * 17) % 60}, 50%, 30%, 0.5)`;
@@ -1218,6 +1234,8 @@ class CrowdSimulationApp {
                 ctx.strokeStyle = disabled ? '#a855f7' : '#7c3aed';
             } else if (polyType === 'wall_unit') {
                 ctx.strokeStyle = disabled ? '#fb923c' : '#ea580c';
+            } else if (polyType === 'terrain_narrow') {
+                ctx.strokeStyle = '#b45309';
             } else {
                 ctx.strokeStyle = disabled ? '#661111' : '#0f3460';
             }

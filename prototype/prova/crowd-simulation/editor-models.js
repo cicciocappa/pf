@@ -16,8 +16,8 @@ export class Building {
         this.label = data.label || '';
         this.position = data.position || { x: 0, y: 0 };
         this.rotation = data.rotation || 0;
-        this.scaleX = data.scaleX || 50;
-        this.scaleY = data.scaleY || 50;
+        this.scaleX = data.scaleX || 5;
+        this.scaleY = data.scaleY || 5;
         this.vertices = data.vertices ? [...data.vertices] : [];
         this.baseVertices = [];
 
@@ -107,8 +107,8 @@ export class Wall {
     constructor(options = {}) {
         this.id = options.id;
         this.points = options.points || [];
-        this.thickness = options.thickness || 30;
-        this.maxSegmentLength = options.maxSegmentLength || 50;
+        this.thickness = options.thickness || 2;
+        this.maxSegmentLength = options.maxSegmentLength || 3;
         this.type = 'wall';
         this.label = options.label || '';
         this.units = [];
