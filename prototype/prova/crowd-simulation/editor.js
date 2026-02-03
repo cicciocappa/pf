@@ -7,7 +7,7 @@ import Delaunator from 'delaunator';
 import Constrainautor from 'constrainautor';
 import { EditorData, Boundary } from './editor-models.js';
 import { GeometryFactory } from './editor-geometry.js';
-import { buildNavMesh, exportNavMesh } from './editor-cdt.js';
+import { buildNavMesh, exportNavMesh, exportMesh3D } from './editor-cdt.js';
 import { EditorRenderer } from './editor-renderer.js';
 import {
     SelectTool, BoundaryTool, BuildingTool, WallTool,
@@ -415,19 +415,13 @@ class NavMeshEditor {
     // Export
     // ========================================
     buildExportJSON() {
-        const narrowWidth = parseFloat(document.getElementById('narrowWidth')?.value) || 0;
-        let navmeshData = this.navmeshData;
-        if (narrowWidth > 0) {
-            navmeshData = buildNavMesh(this.editorData, Delaunator, Constrainautor, narrowWidth);
-        }
-        if (!navmeshData) return null;
-        return exportNavMesh(navmeshData, this.editorData.offMeshLinks);
+        return exportMesh3D(this.editorData, Delaunator, Constrainautor);
     }
 
     exportJSON() {
         const json = this.buildExportJSON();
         if (!json) {
-            this.setStatus('Nessuna triangolazione da esportare.');
+            this.setStatus('Nessun dato da esportare. Disegna almeno un boundary.');
             return;
         }
 
@@ -435,23 +429,32 @@ class NavMeshEditor {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'navmesh.json';
+        a.download = 'mesh3d.json';
         a.click();
         URL.revokeObjectURL(url);
 
-        this.setStatus(`Esportato: ${json.vertices.length} vertici, ${json.polygons.length} poligoni, ${json.offMeshConnections.length} links`);
+        // Calcola totali sommando ground + structures + staticObstacles
+        let totalVerts = json.ground.positions.length / 3;
+        let totalTris = json.ground.indices.length / 3;
+        for (const s of json.structures) {
+            totalVerts += s.positions.length / 3;
+            totalTris += s.indices.length / 3;
+        }
+        totalVerts += json.staticObstacles.positions.length / 3;
+        totalTris += json.staticObstacles.indices.length / 3;
+        this.setStatus(`Esportato mesh 3D: ${totalVerts} vertici, ${totalTris} triangoli, ${json.structures.length} strutture, ${json.offMeshConnections.length} links`);
     }
 
     openInSimulator() {
         const json = this.buildExportJSON();
         if (!json) {
-            this.setStatus('Nessuna triangolazione da esportare.');
+            this.setStatus('Nessun dato da esportare. Disegna almeno un boundary.');
             return;
         }
 
-        localStorage.setItem('editorNavMesh', JSON.stringify(json));
+        localStorage.setItem('editorMesh3D', JSON.stringify(json));
         window.open('index.html?fromEditor=1', '_blank');
-        this.setStatus('Navmesh inviata al simulatore');
+        this.setStatus('Mesh 3D inviata al simulatore');
     }
 
     // ========================================

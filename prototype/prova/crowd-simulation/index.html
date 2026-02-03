@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NavMesh Crowd Simulation</title>
+    <title>Crowd Simulation</title>
     <style>
         * {
             margin: 0;
@@ -81,16 +81,60 @@
             margin-bottom: 8px;
             color: #e94560;
         }
+        .structure-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(22, 33, 62, 0.95);
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            max-height: 50vh;
+            overflow-y: auto;
+            min-width: 180px;
+            display: none;
+        }
+        .structure-panel h4 {
+            margin-bottom: 8px;
+            color: #e94560;
+        }
+        .structure-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+        }
+        .structure-item label {
+            cursor: pointer;
+            user-select: none;
+        }
+        .structure-controls {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .structure-controls button {
+            background: #0f3460;
+            color: #eee;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .structure-controls button:hover {
+            background: #e94560;
+        }
     </style>
 </head>
 <body>
     <div class="toolbar">
         <label>
-            <button id="loadBtn">Carica NavMesh</button>
+            <button id="loadBtn">Carica Mesh 3D</button>
             <input type="file" id="fileInput" accept=".json">
         </label>
         <button id="clearAgents">Rimuovi Agenti</button>
-        <button id="generateSample">NavMesh di Esempio</button>
+        <button id="generateSample">Mesh di Esempio</button>
         <div class="info">
             Agenti: <span id="agentCount">0</span> |
             Selezionati: <span id="selectedCount">0</span> |
@@ -99,16 +143,24 @@
     </div>
     <div class="canvas-container">
         <canvas id="canvas"></canvas>
+        <div class="structure-panel" id="structurePanel">
+            <h4>Strutture</h4>
+            <div class="structure-controls">
+                <button id="structAllOn">Tutti ON</button>
+                <button id="structAllOff">Tutti OFF</button>
+            </div>
+            <div id="structureList"></div>
+        </div>
         <div class="help">
             <h4>Controlli</h4>
             <div><b>Click sinistro + drag:</b> Selezione rettangolare</div>
             <div><b>Click destro:</b> Aggiungi agente / Muovi selezionati</div>
-            <div><b>Alt + Click sinistro:</b> Attiva/Disattiva poligono</div>
+            <div><b>Shift + Click sinistro:</b> Aggiungi agente grande (3x)</div>
             <div><b>Rotella:</b> Zoom</div>
             <div><b>Click centrale + drag:</b> Pan</div>
         </div>
     </div>
-    <div class="status" id="status">Carica una navmesh per iniziare</div>
+    <div class="status" id="status">Carica una mesh 3D dall'editor o da file per iniziare</div>
 
     <script type="importmap">
     {

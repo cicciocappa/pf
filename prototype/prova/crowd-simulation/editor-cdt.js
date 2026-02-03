@@ -862,3 +862,162 @@ export function exportNavMesh(navmeshData, offMeshLinks) {
         offMeshConnections: outLinks
     };
 }
+
+/**
+ * exportMesh3D - Esporta una mesh 3D strutturata per navcat.
+ * Formato:
+ * {
+ *   ground: { positions: [...], indices: [...] },
+ *   structures: [ { id, type, label, positions, indices }, ... ],
+ *   staticObstacles: { positions: [...], indices: [...] },
+ *   offMeshConnections: [...]
+ * }
+ * Ogni chunk ha indicizzazione locale (partono da 0).
+ */
+export function exportMesh3D(editorData, Delaunator, Constrainautor) {
+    if (editorData.boundaries.length === 0) return null;
+
+    const OBSTACLE_HEIGHT = 3.0;
+
+    // --- 1. Ground: triangola ogni boundary a Y=0 ---
+    const groundPositions = [];
+    const groundIndices = [];
+
+    for (const boundary of editorData.boundaries) {
+        const verts = boundary.vertices; // [[x,y], ...]
+        const n = verts.length;
+        if (n < 3) continue;
+
+        const baseIdx = groundPositions.length / 3;
+
+        const flatPts = new Float64Array(n * 2);
+        for (let i = 0; i < n; i++) {
+            flatPts[i * 2] = verts[i][0];
+            flatPts[i * 2 + 1] = verts[i][1];
+        }
+
+        let del, con;
+        try {
+            del = new Delaunator(flatPts);
+            con = new Constrainautor(del);
+            for (let i = 0; i < n; i++) {
+                con.constrainOne(i, (i + 1) % n);
+            }
+        } catch (e) {
+            console.warn('Ground triangulation failed for boundary', boundary.id, e);
+            continue;
+        }
+
+        for (let i = 0; i < n; i++) {
+            groundPositions.push(verts[i][0], 0, verts[i][1]);
+        }
+
+        const numTri = del.triangles.length / 3;
+        for (let t = 0; t < numTri; t++) {
+            const i0 = del.triangles[t * 3];
+            const i1 = del.triangles[t * 3 + 1];
+            const i2 = del.triangles[t * 3 + 2];
+
+            const cx = (verts[i0][0] + verts[i1][0] + verts[i2][0]) / 3;
+            const cy = (verts[i0][1] + verts[i1][1] + verts[i2][1]) / 3;
+
+            if (pointInPolygonArray(cx, cy, verts)) {
+                groundIndices.push(baseIdx + i0, baseIdx + i1, baseIdx + i2);
+            }
+        }
+    }
+
+    // --- 2. Structures: buildings e walls con array locali separati ---
+    const structures = [];
+
+    editorData.buildings.forEach(bldg => {
+        const pos = [];
+        const idx = [];
+        _extrudePolygonXY(pos, idx, bldg.vertices, OBSTACLE_HEIGHT);
+        structures.push({
+            id: bldg.id,
+            type: 'building',
+            label: '',
+            positions: pos,
+            indices: idx
+        });
+    });
+
+    editorData.walls.forEach(wall => {
+        const outline = wall.getOutline();
+        if (outline.length >= 3) {
+            const pos = [];
+            const idx = [];
+            _extrudePolygonXY(pos, idx, outline, OBSTACLE_HEIGHT);
+            structures.push({
+                id: wall.id,
+                type: 'wall',
+                label: '',
+                positions: pos,
+                indices: idx
+            });
+        }
+    });
+
+    // --- 3. Static obstacles: combinati in un unico chunk ---
+    const obsPositions = [];
+    const obsIndices = [];
+
+    editorData.obstacles.forEach(obs => {
+        _extrudePolygonXY(obsPositions, obsIndices, obs.vertices, OBSTACLE_HEIGHT);
+    });
+
+    // --- 4. Off-mesh connections ---
+    const outLinks = (editorData.offMeshLinks || []).map(link => ({
+        start: [link.start[0], 0, link.start[1]],
+        end: [link.end[0], 0, link.end[1]],
+        radius: link.radius || 0.5,
+        bidirectional: link.bidirectional !== false
+    }));
+
+    return {
+        ground: { positions: groundPositions, indices: groundIndices },
+        structures,
+        staticObstacles: { positions: obsPositions, indices: obsIndices },
+        offMeshConnections: outLinks
+    };
+}
+
+/**
+ * Estrude un poligono 2D (con vertici {x,y}) in un prisma 3D.
+ * Crea base a Y=0, tetto a Y=height, e pareti laterali.
+ */
+function _extrudePolygonXY(positions, indices, vertices, height) {
+    const baseIdx = positions.length / 3;
+    const n = vertices.length;
+
+    // Vertici bottom (Y=0) e top (Y=height)
+    for (const v of vertices) {
+        positions.push(v.x, 0, v.y);
+    }
+    for (const v of vertices) {
+        positions.push(v.x, height, v.y);
+    }
+
+    // Pareti laterali (2 triangoli per edge)
+    for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        const b0 = baseIdx + i;
+        const b1 = baseIdx + next;
+        const t0 = baseIdx + n + i;
+        const t1 = baseIdx + n + next;
+
+        indices.push(b0, t0, b1);
+        indices.push(b1, t0, t1);
+    }
+
+    // Tetto (fan triangulation)
+    for (let i = 1; i < n - 1; i++) {
+        indices.push(baseIdx + n, baseIdx + n + i, baseIdx + n + i + 1);
+    }
+
+    // Base (winding inverso)
+    for (let i = 1; i < n - 1; i++) {
+        indices.push(baseIdx, baseIdx + i + 1, baseIdx + i);
+    }
+}
