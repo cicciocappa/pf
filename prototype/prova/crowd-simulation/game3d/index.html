@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower Attack 3D</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a2e;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        #game-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        #game-container canvas {
+            display: block;
+        }
+
+        /* HUD overlay */
+        #hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            pointer-events: none;
+            padding: 12px 16px;
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        .hud-panel {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            padding: 8px 14px;
+            color: #eee;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .hud-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 2px 0;
+        }
+        .hud-bar-label {
+            width: 40px;
+            font-weight: bold;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        .hud-bar-track {
+            width: 120px;
+            height: 10px;
+            background: #333;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .hud-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.2s;
+        }
+        .hud-bar-fill.hp { background: #4ade80; }
+        .hud-bar-fill.mana { background: #60a5fa; }
+        .hud-bar-value {
+            font-size: 11px;
+            color: #aaa;
+            min-width: 50px;
+        }
+
+        .hud-spells {
+            font-size: 11px;
+            color: #ccc;
+        }
+        .hud-spells kbd {
+            background: #444;
+            border: 1px solid #666;
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #fbbf24;
+        }
+        .hud-spells .ready { color: #4ade80; }
+        .hud-spells .cooldown { color: #888; }
+
+        #hud-status {
+            font-size: 11px;
+            color: #888;
+        }
+
+        /* Game over / Victory overlay */
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.6);
+            pointer-events: none;
+        }
+        #overlay.visible {
+            display: flex;
+        }
+        #overlay-text {
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 0 0 20px currentColor;
+        }
+        #overlay-text.victory { color: #fbbf24; }
+        #overlay-text.defeat { color: #ef4444; }
+
+        /* Controls help */
+        .help-panel {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 10px;
+            color: #888;
+            line-height: 1.7;
+            pointer-events: none;
+        }
+        .help-panel b { color: #ccc; }
+
+        /* Selection rectangle */
+        #selection-rect {
+            position: absolute;
+            border: 1px solid #00ff00;
+            background: rgba(0, 255, 0, 0.1);
+            pointer-events: none;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <!-- HUD -->
+        <div id="hud">
+            <div class="hud-panel">
+                <div class="hud-bar">
+                    <span class="hud-bar-label" style="color:#4ade80">HP</span>
+                    <div class="hud-bar-track"><div id="hpBar" class="hud-bar-fill hp" style="width:100%"></div></div>
+                    <span id="hpText" class="hud-bar-value">100/100</span>
+                </div>
+                <div class="hud-bar">
+                    <span class="hud-bar-label" style="color:#60a5fa">Mana</span>
+                    <div class="hud-bar-track"><div id="manaBar" class="hud-bar-fill mana" style="width:50%"></div></div>
+                    <span id="manaText" class="hud-bar-value">50/100</span>
+                </div>
+            </div>
+            <div class="hud-panel hud-spells" id="hudSpells"></div>
+            <div class="hud-panel" id="hud-status">Creature: 0 | Torri: 0</div>
+        </div>
+
+        <!-- Game over / Victory -->
+        <div id="overlay">
+            <div id="overlay-text"></div>
+        </div>
+
+        <!-- Selection rectangle overlay -->
+        <div id="selection-rect"></div>
+
+        <!-- Controls help -->
+        <div class="help-panel">
+            <b>Click destro:</b> Muovi selezionate / mago<br>
+            <b>Click sinistro drag:</b> Selezione rettangolare<br>
+            <b>Doppio click:</b> Seleziona tutte dello stesso tipo<br>
+            <b>Shift+click:</b> Aggiungi alla selezione<br>
+            <b>ESC:</b> Deseleziona (torna al mago)<br>
+            <b>Click sinistro su torre:</b> Attacca<br>
+            <b>1:</b> Palla di Fuoco<br>
+            <b>G/L/E:</b> Evoca Gigante/Larve/Elementale<br>
+            <b>WASD:</b> Pan camera &nbsp; <b>Rotella:</b> Zoom
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://esm.sh/three@0.170.0",
+            "three/addons/": "https://esm.sh/three@0.170.0/examples/jsm/",
+            "mathcat": "../navcat/node_modules/mathcat/dist/index.js",
+            "navcat": "../navcat/dist/index.js",
+            "navcat/blocks": "../navcat/dist/blocks.js"
+        }
+    }
+    </script>
+    <script type="module" src="src/main.js"></script>
+</body>
+</html>

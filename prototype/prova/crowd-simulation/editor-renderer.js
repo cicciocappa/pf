@@ -27,6 +27,7 @@ export class EditorRenderer {
         this.renderObstacles(ctx);
         this.renderOffMeshLinks(ctx);
         this.renderSeedPoints(ctx);
+        this.renderStartingPosition(ctx);
         this.renderSelection(ctx);
         this.renderCurrentPolygon(ctx);
         this.renderToolPreview(ctx);
@@ -430,6 +431,39 @@ export class EditorRenderer {
             ctx.fillStyle = '#fff';
             ctx.fill();
         }
+    }
+
+    // ========================================
+    // Starting Position
+    // ========================================
+    renderStartingPosition(ctx) {
+        const pos = this.editor.editorData.startingPosition;
+        if (!pos) return;
+
+        const invZoom = 1 / this.editor.camera.zoom;
+        const r = invZoom * 8;
+
+        // Outer circle
+        ctx.beginPath();
+        ctx.arc(pos[0], pos[1], r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(74, 144, 217, 0.5)';
+        ctx.fill();
+        ctx.strokeStyle = '#4a90d9';
+        ctx.lineWidth = invZoom * 2;
+        ctx.stroke();
+
+        // Inner circle (agent-like)
+        ctx.beginPath();
+        ctx.arc(pos[0], pos[1], r * 0.4, 0, Math.PI * 2);
+        ctx.fillStyle = '#4a90d9';
+        ctx.fill();
+
+        // "S" label
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${invZoom * 10}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('S', pos[0], pos[1] - r * 1.6);
     }
 
     // ========================================

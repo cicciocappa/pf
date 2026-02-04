@@ -9,7 +9,7 @@ import { exportMesh3D } from './editor-cdt.js';
 import { EditorRenderer } from './editor-renderer.js';
 import {
     SelectTool, BoundaryTool, BuildingTool, WallTool,
-    ObstacleTool, OffMeshTool, SeedPointTool
+    ObstacleTool, OffMeshTool, SeedPointTool, StartingPositionTool
 } from './editor-tools.js';
 
 class NavMeshEditor {
@@ -71,7 +71,8 @@ class NavMeshEditor {
             wall: new WallTool(this),
             obstacle: new ObstacleTool(this),
             offmesh: new OffMeshTool(this),
-            seed: new SeedPointTool(this)
+            seed: new SeedPointTool(this),
+            startpos: new StartingPositionTool(this)
         };
     }
 
@@ -189,6 +190,7 @@ class NavMeshEditor {
         document.getElementById('exportJSON')?.addEventListener('click', () => this.exportJSON());
         document.getElementById('openPreview')?.addEventListener('click', () => this.openPreview());
         document.getElementById('openSimulator')?.addEventListener('click', () => this.openInSimulator());
+        document.getElementById('openGame3D')?.addEventListener('click', () => this.openInGame3D());
         document.getElementById('saveProject')?.addEventListener('click', () => this.saveProject());
         document.getElementById('loadProject')?.addEventListener('click', () => {
             document.getElementById('projectFileInput').click();
@@ -284,6 +286,7 @@ class NavMeshEditor {
         if (e.key === 'o' || e.key === 'O') { this.setTool('obstacle'); return; }
         if (e.key === 'l' || e.key === 'L') { this.setTool('offmesh'); return; }
         if (e.key === 'p' || e.key === 'P') { this.setTool('seed'); return; }
+        if (e.key === 't' || e.key === 'T') { this.setTool('startpos'); return; }
         if (e.key === 's' && !e.ctrlKey) { this.setTool('select'); return; }
         if (e.key === 'g' || e.key === 'G') {
             this.snapEnabled = !this.snapEnabled;
@@ -436,6 +439,18 @@ class NavMeshEditor {
         this.setStatus('Mesh 3D inviata al simulatore');
     }
 
+    openInGame3D() {
+        const json = this.buildExportJSON();
+        if (!json) {
+            this.setStatus('Nessun dato da esportare. Disegna almeno un boundary.');
+            return;
+        }
+
+        localStorage.setItem('editorMesh3D', JSON.stringify(json));
+        window.open('game3d/index.html', '_blank');
+        this.setStatus('Mesh 3D inviata al gioco 3D');
+    }
+
     openPreview() {
         const json = this.buildExportJSON();
         if (!json) {
@@ -526,6 +541,7 @@ class NavMeshEditor {
         const nObs = this.editorData.obstacles.size;
         const nLinks = this.editorData.offMeshLinks.length;
         const nSeeds = this.editorData.seedPoints.length;
+        const hasStart = this.editorData.startingPosition ? 'YES' : 'NO';
 
         const setText = (id, val) => {
             const el = document.getElementById(id);
@@ -538,6 +554,7 @@ class NavMeshEditor {
         setText('obstacleCount', nObs);
         setText('linkCount', nLinks);
         setText('seedCount', nSeeds);
+        setText('startPosStatus', hasStart);
     }
 
     updateStatus() {

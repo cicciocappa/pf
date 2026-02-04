@@ -679,6 +679,7 @@ export class EditorData {
         this.obstacles = new Map();
         this.offMeshLinks = [];
         this.seedPoints = [];
+        this.startingPosition = null; // [x, y] or null
         this.connections = [];
         this.connectionManager = new ConnectionManager(this);
 
@@ -930,6 +931,7 @@ export class EditorData {
             obstacles: [...this.obstacles.values()].map(o => o.toJSON()),
             offMeshLinks: this.offMeshLinks.map(l => ({ ...l })),
             seedPoints: this.seedPoints.map(p => [...p]),
+            startingPosition: this.startingPosition ? [...this.startingPosition] : null,
             connections: JSON.parse(JSON.stringify(this.connections)),
             _idCounter: this._idCounter
         };
@@ -969,6 +971,7 @@ export class EditorData {
 
         this.offMeshLinks = data.offMeshLinks || [];
         this.seedPoints = data.seedPoints || [];
+        this.startingPosition = data.startingPosition ? [...data.startingPosition] : null;
         this.connections = data.connections || [];
 
         this.updateAllGeometry();
@@ -981,6 +984,7 @@ export class EditorData {
         this.obstacles.clear();
         this.offMeshLinks = [];
         this.seedPoints = [];
+        this.startingPosition = null;
         this.connections = [];
         this._snapCacheDirty = true;
     }

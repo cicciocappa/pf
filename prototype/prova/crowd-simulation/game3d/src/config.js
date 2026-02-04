@@ -2,29 +2,6 @@
 // Configurazione e costanti di gioco
 // ========================================
 
-// --- Tile ---
-export const TILE_SIZE = 1.0; // 1 unità mondo = 1 tile
-
-export const Tile = {
-    GRASS: 0,
-    MUD: 1,
-    WALL: 2,
-    WATER: 3,
-    FROZEN_WATER: 4,
-    DIRT: 5,
-    FOREST: 6,
-};
-
-export const TileProps = {
-    [Tile.GRASS]:        { walkable: true,  speedMult: 1.0, cost: 10,       color: 0x7cfc00 },
-    [Tile.MUD]:          { walkable: true,  speedMult: 0.5, cost: 20,       color: 0x8b4513 },
-    [Tile.WALL]:         { walkable: false, speedMult: 0,   cost: Infinity, color: 0x808080 },
-    [Tile.WATER]:        { walkable: false, speedMult: 0,   cost: Infinity, color: 0x00bfff },
-    [Tile.FROZEN_WATER]: { walkable: true,  speedMult: 1.2, cost: 8,        color: 0xafeeee },
-    [Tile.DIRT]:         { walkable: true,  speedMult: 1.0, cost: 10,       color: 0xdeb887 },
-    [Tile.FOREST]:       { walkable: false, speedMult: 0,   cost: Infinity, color: 0x228b22 },
-};
-
 // --- Entity States ---
 export const EntityState = {
     IDLE: 'IDLE',
@@ -44,7 +21,7 @@ export const CreatureType = {
 export const CreatureStats = {
     [CreatureType.GIANT]: {
         hp: 300,
-        speed: 1.5,       // tiles/sec
+        speed: 1.5,
         radius: 0.4,
         damage: 25,
         attackRange: 1.2,
@@ -63,7 +40,7 @@ export const CreatureStats = {
         attackCooldown: 1.0,
         manaCost: 1,
         intelligence: 0.0,
-        spawnCount: 5,      // ne appaiono 5 alla volta
+        spawnCount: 5,
         color: 0x9ACD32,
         label: 'Larva',
     },
@@ -85,11 +62,10 @@ export const CreatureStats = {
 export const WizardStats = {
     hp: 100,
     speed: 3.0,
-    radius: 0.25,
+    radius: 0.3,
     manaMax: 100,
     manaStart: 50,
-    manaRegenRate: 1,    // mana/sec
-    summonRange: 5.0,    // raggio cerchio evocazione
+    manaRegenRate: 1,
     color: 0x4169E1,
 };
 
@@ -111,7 +87,7 @@ export const TowerStats = {
         hp: 100,
         damage: 10,
         range: 5.0,
-        fireRate: 1.0,     // colpi/sec
+        fireRate: 1.0,
         targeting: TowerTargeting.PROXIMITY,
         projectileSpeed: 8.0,
         color: 0xA0A0A0,
@@ -159,14 +135,8 @@ export const SpellStats = {
     },
 };
 
-// --- Defender (enemy troops from barracks) ---
-export const DefenderStats = {
-    hp: 40,
-    speed: 2.0,
-    radius: 0.2,
-    damage: 8,
-    attackRange: 0.8,
-    attackCooldown: 1.2,
-    chaseRange: 6.0,
-    color: 0xCC0000,
-};
+// --- NavMesh pipeline ---
+export const SMALL_RADIUS = 0.4;
+export const LARGE_RADIUS = 1.2;
+export const AREA_WALKABLE = 1;
+export const AREA_WALKABLE_NARROW = 2;

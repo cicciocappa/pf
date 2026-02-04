@@ -15,7 +15,7 @@ import { Creature } from './Creature.js';
 import { Tower } from './Tower.js';
 import { Projectile } from './Projectile.js';
 
-import { EntityState, CreatureStats, CreatureType, SpellType } from './config.js';
+import { EntityState, CreatureStats, CreatureType, SpellType, WizardStats } from './config.js';
 
 export class Game {
     constructor(pixiApp) {
@@ -58,8 +58,32 @@ export class Game {
         this.treasurePos = null;
         this.treasureGraphics = null;
 
+        // Summon mode
+        this.summonMode = null; // null o { creatureType }
+        this.summonCircle = null;
+        this._createSummonCircle();
+
         // Input
         this.input = new InputManager(this.app.view, this.camera, this);
+    }
+
+    _createSummonCircle() {
+        this.summonCircle = new PIXI.Graphics();
+        this.summonCircle.visible = false;
+        this.entityLayer.addChild(this.summonCircle);
+    }
+
+    _drawSummonCircle(color) {
+        const r = WizardStats.summonRange;
+        const g = this.summonCircle;
+        g.clear();
+        // Cerchio semitrasparente
+        g.beginFill(color, 0.08);
+        g.drawCircle(0, 0, r);
+        g.endFill();
+        // Bordo
+        g.lineStyle(0.05, color, 0.5);
+        g.drawCircle(0, 0, r);
     }
 
     // ========================================
@@ -154,6 +178,9 @@ export class Game {
         this.effects = [];
         this.wizard = null;
         this.victory = false;
+        this.summonMode = null;
+        this.summonCircle = null;
+        this._createSummonCircle();
     }
 
     // ========================================
@@ -188,9 +215,57 @@ export class Game {
         this.spellSystem.cast(spellType, this.wizard, worldPos.x, worldPos.y);
     }
 
-    onSummonCreature(creatureType) {
+    enterSummonMode(creatureType) {
         if (!this.wizard || !this.wizard.alive) return;
 
+        const stats = CreatureStats[creatureType];
+        if (!stats) return;
+
+        // Check mana (non spendere ancora)
+        if (!this.wizard.canCast(stats.manaCost)) {
+            console.log('Mana insufficiente per evocare');
+            return;
+        }
+
+        // Se già in summon mode con lo STESSO tipo → evoca attorno al mago
+        if (this.summonMode && this.summonMode.creatureType === creatureType) {
+            this._spawnCreatures(creatureType, this.wizard.x, this.wizard.y);
+            this.cancelSummon();
+            return;
+        }
+
+        // Entra in summon mode (o switch tipo)
+        this.summonMode = { creatureType };
+        this._drawSummonCircle(stats.color);
+        this.summonCircle.visible = true;
+        this.summonCircle.position.set(this.wizard.x, this.wizard.y);
+    }
+
+    summonAt(wx, wy) {
+        if (!this.summonMode || !this.wizard || !this.wizard.alive) return;
+
+        const dx = wx - this.wizard.x;
+        const dy = wy - this.wizard.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist <= WizardStats.summonRange) {
+            // Dentro il cerchio → evoca lì
+            this._spawnCreatures(this.summonMode.creatureType, wx, wy);
+            this.cancelSummon();
+        } else {
+            // Fuori dal cerchio → annulla
+            this.cancelSummon();
+        }
+    }
+
+    cancelSummon() {
+        this.summonMode = null;
+        if (this.summonCircle) {
+            this.summonCircle.visible = false;
+        }
+    }
+
+    _spawnCreatures(creatureType, cx, cy) {
         const stats = CreatureStats[creatureType];
         if (!stats) return;
 
@@ -203,13 +278,12 @@ export class Game {
 
         const count = stats.spawnCount || 1;
         for (let i = 0; i < count; i++) {
-            // Spawna vicino al mago con un piccolo offset
             const angle = (Math.PI * 2 * i) / count + Math.random() * 0.3;
             const dist = 0.8 + Math.random() * 0.5;
-            const cx = this.wizard.x + Math.cos(angle) * dist;
-            const cy = this.wizard.y + Math.sin(angle) * dist;
+            const sx = cx + Math.cos(angle) * dist;
+            const sy = cy + Math.sin(angle) * dist;
 
-            const creature = new Creature(cx, cy, creatureType);
+            const creature = new Creature(sx, sy, creatureType);
             this.creatures.push(creature);
             this.entityLayer.addChild(creature.createVisual());
             this.crowdSystem.addAgent(creature);
@@ -295,6 +369,11 @@ export class Game {
 
         // Vittoria: mago raggiunge il tesoro
         this._checkVictory();
+
+        // Aggiorna posizione cerchio evocazione
+        if (this.summonMode && this.summonCircle && this.wizard && this.wizard.alive) {
+            this.summonCircle.position.set(this.wizard.x, this.wizard.y);
+        }
 
         // Aggiorna rotazione visual
         this._updateVisualRotations();

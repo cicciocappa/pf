@@ -56,7 +56,7 @@
             position: relative;
             overflow: hidden;
         }
-        canvas {
+        .canvas-container canvas {
             position: absolute;
             top: 0;
             left: 0;
@@ -142,7 +142,6 @@
         </div>
     </div>
     <div class="canvas-container">
-        <canvas id="canvas"></canvas>
         <div class="structure-panel" id="structurePanel">
             <h4>Strutture</h4>
             <div class="structure-controls">
@@ -156,8 +155,9 @@
             <div><b>Click sinistro + drag:</b> Selezione rettangolare</div>
             <div><b>Click destro:</b> Aggiungi agente / Muovi selezionati</div>
             <div><b>Shift + Click sinistro:</b> Aggiungi agente grande (3x)</div>
-            <div><b>Rotella:</b> Zoom</div>
-            <div><b>Click centrale + drag:</b> Pan</div>
+            <div><b>Rotella:</b> Zoom (orbit)</div>
+            <div><b>Click centrale + drag:</b> Pan (orbit)</div>
+            <div><b>Click sinistro su vuoto + drag:</b> Ruota camera</div>
         </div>
     </div>
     <div class="status" id="status">Carica una mesh 3D dall'editor o da file per iniziare</div>
@@ -165,6 +165,8 @@
     <script type="importmap">
     {
         "imports": {
+            "three": "https://esm.sh/three@0.170.0",
+            "three/addons/": "https://esm.sh/three@0.170.0/examples/jsm/",
             "mathcat": "./navcat/node_modules/mathcat/dist/index.js",
             "navcat": "./navcat/dist/index.js",
             "navcat/blocks": "./navcat/dist/blocks.js",

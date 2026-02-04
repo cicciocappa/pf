@@ -928,3 +928,38 @@ export class SeedPointTool extends Tool {
     getCursor() { return 'crosshair'; }
 }
 
+// ========================================
+// Starting Position Tool
+// ========================================
+export class StartingPositionTool extends Tool {
+    constructor(editor) {
+        super(editor);
+        this.name = 'startpos';
+    }
+
+    onMouseDown(x, y, event) {
+        if (event.button !== 0) return;
+
+        // Shift+click: remove starting position
+        if (event.shiftKey) {
+            if (this.editor.editorData.startingPosition) {
+                this.editor.saveUndo();
+                this.editor.editorData.startingPosition = null;
+                this.editor.updateInfoBar();
+            }
+            return;
+        }
+
+        this.editor.saveUndo();
+        this.editor.editorData.startingPosition = [x, y];
+        this.editor.updateInfoBar();
+    }
+
+    getStatusText() {
+        const has = this.editor.editorData.startingPosition ? 'SET' : 'NOT SET';
+        return `Starting Position (${has}): click to place, Shift+click to remove`;
+    }
+
+    getCursor() { return 'crosshair'; }
+}
+

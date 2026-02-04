@@ -1,27 +1,9 @@
 // ============================================================================
 // Crowd Simulation con navcat (mesh 3D → navmesh automatica, multi-agent)
-// ============================================================================
-//
-// Questa applicazione è un simulatore di folla basato su navigation mesh.
-// La navmesh viene generata automaticamente da navcat a partire da una mesh
-// 3D prodotta dall'editor (ground plane + volumi ostacolo estrusi).
-//
-// Supporta agenti di due dimensioni:
-//   - Piccoli (default): radius 0.4, passano ovunque
-//   - Grandi (Shift+click sinistro): radius 1.2, non passano nelle zone strette
-//
-// Funzionalità:
-//   - Caricare una mesh 3D da file JSON o dall'editor integrato
-//   - navcat genera la navmesh con aree marcate per agenti multi-dimensione
-//   - Piazzare agenti sulla navmesh con click destro (piccoli) o Shift+sinistro (grandi)
-//   - Selezionare agenti (singolo click o selezione rettangolare)
-//   - Muovere gli agenti selezionati verso un target (click destro)
-//   - Abilitare/disabilitare strutture (edifici, muri) dal pannello laterale
-//   - Supporto per connessioni off-mesh tra isole separate della navmesh
+// Player 3D con Three.js
 // ============================================================================
 
-// --- Import da navcat (API basso livello per pipeline personalizzata) ---
-
+// --- Import da navcat ---
 import {
     findNearestPoly,
     createFindNearestPolyResult,
@@ -30,7 +12,6 @@ import {
     addOffMeshConnection,
     OffMeshConnectionDirection,
     isOffMeshConnectionConnected,
-    // Pipeline navmesh
     BuildContext,
     markWalkableTriangles,
     calculateMeshBounds,
@@ -59,8 +40,10 @@ import {
 } from './navcat/dist/index.js';
 
 import { crowd, floodFillNavMesh } from './navcat/dist/blocks.js';
-
 import { vec3, box3, vec2 } from 'mathcat';
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // --- Costanti per le aree ---
 const AREA_WALKABLE = 1;
@@ -68,17 +51,13 @@ const AREA_WALKABLE_NARROW = 2;
 
 // --- Parametri agenti ---
 const SMALL_RADIUS = 0.4;
-const LARGE_RADIUS = 1.2; // 3x small
+const LARGE_RADIUS = 1.2;
 
 // ============================================================================
 // Classe principale dell'applicazione
 // ============================================================================
 class CrowdSimulationApp {
     constructor() {
-        // --- Riferimenti DOM ---
-        this.canvas = document.getElementById('canvas');
-        this.ctx = this.canvas.getContext('2d');
-
         // --- Stato NavMesh e Crowd ---
         this.navMesh = null;
         this.crowdSim = null;
@@ -93,7 +72,7 @@ class CrowdSimulationApp {
         this.structuredMeshData = null;
         this.disabledStructures = new Set();
 
-        // --- Query Filter per agenti piccoli (passano ovunque) ---
+        // --- Query Filters ---
         this.smallQueryFilter = {
             includeFlags: DEFAULT_QUERY_FILTER.includeFlags,
             excludeFlags: DEFAULT_QUERY_FILTER.excludeFlags,
@@ -101,7 +80,6 @@ class CrowdSimulationApp {
             passFilter: DEFAULT_QUERY_FILTER.passFilter
         };
 
-        // --- Query Filter per agenti grandi (esclusi da zone strette) ---
         this.largeQueryFilter = {
             getCost: DEFAULT_QUERY_FILTER.getCost,
             passFilter(nodeRef, navMesh) {
@@ -113,18 +91,27 @@ class CrowdSimulationApp {
         // --- Selezione agenti ---
         this.selectedAgents = new Set();
 
-        // --- Camera 2D ---
-        this.camera = {
-            x: 0,
-            y: 0,
-            zoom: 15
-        };
+        // --- Three.js objects ---
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.controls = null;
 
-        // --- Stato dell'input ---
-        this.isPanning = false;
+        // --- Scene geometry groups ---
+        this.levelGroup = new THREE.Group();
+        this.navMeshGroup = new THREE.Group();
+        this.agentMeshes = new Map(); // agentId → { sphere, directionLine, pathLine, targetLine, targetSphere }
+
+        // --- Raycasting ---
+        this.raycaster = new THREE.Raycaster();
+        this.groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        this.mouse = new THREE.Vector2();
+
+        // --- Selection state ---
         this.isSelecting = false;
-        this.dragStart = { x: 0, y: 0 };
+        this.selectionStart = { x: 0, y: 0 };
         this.selectionRect = null;
+        this.selectionDiv = null;
 
         // --- Web Worker per navmesh ---
         this.navMeshWorker = new Worker('navmesh-worker-bundle.js');
@@ -141,6 +128,10 @@ class CrowdSimulationApp {
         this.frameCount = 0;
         this.fps = 0;
 
+        // --- Shared geometries for agents ---
+        this._smallSphereGeom = new THREE.SphereGeometry(SMALL_RADIUS, 16, 12);
+        this._largeSphereGeom = new THREE.SphereGeometry(LARGE_RADIUS, 16, 12);
+
         this.init();
     }
 
@@ -149,20 +140,80 @@ class CrowdSimulationApp {
     // ========================================================================
 
     init() {
-        this.setupCanvas();
+        this.setupThreeJS();
         this.setupEventListeners();
         this.loadInitialData();
         this.startLoop();
     }
 
-    setupCanvas() {
-        const resize = () => {
-            const container = this.canvas.parentElement;
-            this.canvas.width = container.clientWidth;
-            this.canvas.height = container.clientHeight;
+    setupThreeJS() {
+        const container = document.querySelector('.canvas-container');
+
+        // Scene
+        this.scene = new THREE.Scene();
+        this.scene.background = new THREE.Color(0x1a1a2e);
+
+        // Camera
+        this.camera = new THREE.PerspectiveCamera(
+            60,
+            container.clientWidth / container.clientHeight,
+            0.1,
+            2000
+        );
+        this.camera.position.set(30, 40, 30);
+
+        // Renderer
+        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        this.renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(this.renderer.domElement);
+
+        // OrbitControls - only middle mouse button for orbit/pan, leave left/right free
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.enableDamping = true;
+        this.controls.mouseButtons = {
+            LEFT: null,   // We handle left button ourselves
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: null   // We handle right button ourselves
         };
-        resize();
-        window.addEventListener('resize', resize);
+        // Allow scroll wheel zoom
+        this.controls.enableZoom = true;
+        // Disable rotate via left button (we use it for selection)
+        this.controls.enableRotate = true;
+        // Use keyboard for rotate instead, or middle button
+        this.controls.touches = {
+            ONE: THREE.TOUCH.ROTATE,
+            TWO: THREE.TOUCH.DOLLY_PAN
+        };
+
+        // Lights
+        this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(50, 100, 50);
+        this.scene.add(dirLight);
+
+        // Add groups to scene
+        this.scene.add(this.levelGroup);
+        this.scene.add(this.navMeshGroup);
+
+        // Grid helper
+        const grid = new THREE.GridHelper(200, 40, 0x333355, 0x222244);
+        grid.position.y = -0.01;
+        this.scene.add(grid);
+
+        // Selection overlay div
+        this.selectionDiv = document.createElement('div');
+        this.selectionDiv.style.cssText = 'position:absolute;border:1px dashed #e94560;background:rgba(233,69,96,0.1);pointer-events:none;display:none;';
+        container.appendChild(this.selectionDiv);
+
+        // Resize
+        window.addEventListener('resize', () => {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            this.camera.aspect = w / h;
+            this.camera.updateProjectionMatrix();
+            this.renderer.setSize(w, h);
+        });
     }
 
     setupEventListeners() {
@@ -195,11 +246,12 @@ class CrowdSimulationApp {
             this.loadInitialData();
         });
 
-        // Pulsanti strutture
+        // Structure panel buttons
         document.getElementById('structAllOn')?.addEventListener('click', () => {
             this.disabledStructures.clear();
             this._updateStructureCheckboxes();
             this.rebuildNavMesh();
+            this._rebuildSceneGeometry();
         });
 
         document.getElementById('structAllOff')?.addEventListener('click', () => {
@@ -209,25 +261,593 @@ class CrowdSimulationApp {
                 }
                 this._updateStructureCheckboxes();
                 this.rebuildNavMesh();
+                this._rebuildSceneGeometry();
             }
         });
 
-        this.canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
-        this.canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
-        this.canvas.addEventListener('mouseup', this.onMouseUp.bind(this));
-        this.canvas.addEventListener('wheel', this.onWheel.bind(this));
-        this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        // Mouse events on the renderer canvas
+        const canvas = this.renderer.domElement;
+        canvas.addEventListener('mousedown', this.onMouseDown.bind(this));
+        canvas.addEventListener('mousemove', this.onMouseMove.bind(this));
+        canvas.addEventListener('mouseup', this.onMouseUp.bind(this));
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+
+    // ========================================================================
+    // 3D Level Geometry (from preview.html)
+    // ========================================================================
+
+    _buildMesh(positions, indices, color, opacity = 1) {
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.setIndex(indices);
+        geom.computeVertexNormals();
+
+        const mat = new THREE.MeshPhongMaterial({
+            color,
+            side: THREE.DoubleSide,
+            transparent: opacity < 1,
+            opacity,
+            depthWrite: opacity >= 1,
+        });
+        return new THREE.Mesh(geom, mat);
+    }
+
+    _buildWireframe(positions, indices, color) {
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.setIndex(indices);
+        const wire = new THREE.WireframeGeometry(geom);
+        return new THREE.LineSegments(wire, new THREE.LineBasicMaterial({ color, opacity: 0.5, transparent: true }));
+    }
+
+    _rebuildSceneGeometry() {
+        // Clear existing level geometry
+        while (this.levelGroup.children.length > 0) {
+            const child = this.levelGroup.children[0];
+            this.levelGroup.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+        }
+
+        const data = this.structuredMeshData;
+        if (!data) return;
+
+        // Ground
+        if (data.ground && data.ground.positions.length > 0) {
+            this.levelGroup.add(this._buildMesh(data.ground.positions, data.ground.indices, 0x3a7d44, 0.7));
+            this.levelGroup.add(this._buildWireframe(data.ground.positions, data.ground.indices, 0x66ff66));
+        }
+
+        // Structures (only enabled ones)
+        const structColors = { building: 0xc0392b, wall: 0xe67e22 };
+        for (const s of data.structures) {
+            if (this.disabledStructures.has(s.id)) continue;
+            const col = structColors[s.type] || 0x9b59b6;
+            this.levelGroup.add(this._buildMesh(s.positions, s.indices, col, 0.85));
+            this.levelGroup.add(this._buildWireframe(s.positions, s.indices, 0xffffff));
+        }
+
+        // Static obstacles
+        if (data.staticObstacles && data.staticObstacles.positions.length > 0) {
+            this.levelGroup.add(this._buildMesh(data.staticObstacles.positions, data.staticObstacles.indices, 0x8e44ad, 0.85));
+            this.levelGroup.add(this._buildWireframe(data.staticObstacles.positions, data.staticObstacles.indices, 0xffffff));
+        }
+
+        // Off-mesh connections
+        if (data.offMeshConnections && data.offMeshConnections.length > 0) {
+            const pts = [];
+            for (const link of data.offMeshConnections) {
+                pts.push(link.start[0], link.start[1] + 0.1, link.start[2]);
+                pts.push(link.end[0], link.end[1] + 0.1, link.end[2]);
+            }
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+            this.levelGroup.add(new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color: 0x00ffff })));
+        }
+    }
+
+    // ========================================================================
+    // NavMesh 3D Rendering
+    // ========================================================================
+
+    _rebuildNavMeshGeometry() {
+        // Clear existing navmesh geometry
+        while (this.navMeshGroup.children.length > 0) {
+            const child = this.navMeshGroup.children[0];
+            this.navMeshGroup.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) child.material.dispose();
+        }
+
+        if (this.renderPolygons.length === 0) return;
+
+        const verts = this.renderVertices;
+
+        // Build navmesh polygon mesh
+        const positions = [];
+        const colors = [];
+        const wallPositions = [];
+
+        for (let i = 0; i < this.renderPolygons.length; i++) {
+            const poly = this.renderPolygons[i];
+            if (poly.flags === 0) continue;
+            const isNarrow = poly.area === AREA_WALKABLE_NARROW;
+
+            // Triangulate the polygon (fan from first vertex)
+            const pVerts = poly.vertices;
+            for (let j = 1; j < pVerts.length - 1; j++) {
+                const v0 = pVerts[0], v1 = pVerts[j], v2 = pVerts[j + 1];
+
+                positions.push(
+                    verts[v0 * 3], verts[v0 * 3 + 1] + 0.05, verts[v0 * 3 + 2],
+                    verts[v1 * 3], verts[v1 * 3 + 1] + 0.05, verts[v1 * 3 + 2],
+                    verts[v2 * 3], verts[v2 * 3 + 1] + 0.05, verts[v2 * 3 + 2]
+                );
+
+                let r, g, b;
+                if (isNarrow) {
+                    r = 0.55; g = 0.4; b = 0.2;
+                } else {
+                    const hue = (200 + (i * 17) % 60) / 360;
+                    const c = this._hslToRgb(hue, 0.5, 0.3);
+                    r = c[0]; g = c[1]; b = c[2];
+                }
+                for (let k = 0; k < 3; k++) {
+                    colors.push(r, g, b);
+                }
+            }
+
+            // Collect wall edges
+            for (let j = 0; j < pVerts.length; j++) {
+                const v1i = pVerts[j];
+                const v2i = pVerts[(j + 1) % pVerts.length];
+                if (!this.isSharedEdge(v1i, v2i)) {
+                    wallPositions.push(
+                        verts[v1i * 3], verts[v1i * 3 + 1] + 0.06, verts[v1i * 3 + 2],
+                        verts[v2i * 3], verts[v2i * 3 + 1] + 0.06, verts[v2i * 3 + 2]
+                    );
+                }
+            }
+        }
+
+        // NavMesh polygons
+        if (positions.length > 0) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geom.computeVertexNormals();
+
+            const mat = new THREE.MeshPhongMaterial({
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.6,
+                side: THREE.DoubleSide,
+                depthWrite: false,
+            });
+            this.navMeshGroup.add(new THREE.Mesh(geom, mat));
+        }
+
+        // Wall edges
+        if (wallPositions.length > 0) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(wallPositions, 3));
+            const mat = new THREE.LineBasicMaterial({ color: 0xe94560, linewidth: 2 });
+            this.navMeshGroup.add(new THREE.LineSegments(geom, mat));
+        }
+
+        // Edge wireframe for all polygon edges
+        const edgePositions = [];
+        for (let i = 0; i < this.renderPolygons.length; i++) {
+            const poly = this.renderPolygons[i];
+            if (poly.flags === 0) continue;
+            const pVerts = poly.vertices;
+            for (let j = 0; j < pVerts.length; j++) {
+                const v1i = pVerts[j];
+                const v2i = pVerts[(j + 1) % pVerts.length];
+                edgePositions.push(
+                    verts[v1i * 3], verts[v1i * 3 + 1] + 0.06, verts[v1i * 3 + 2],
+                    verts[v2i * 3], verts[v2i * 3 + 1] + 0.06, verts[v2i * 3 + 2]
+                );
+            }
+        }
+        if (edgePositions.length > 0) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+            const mat = new THREE.LineBasicMaterial({ color: 0x0f3460, transparent: true, opacity: 0.4 });
+            this.navMeshGroup.add(new THREE.LineSegments(geom, mat));
+        }
+    }
+
+    _hslToRgb(h, s, l) {
+        let r, g, b;
+        if (s === 0) {
+            r = g = b = l;
+        } else {
+            const hue2rgb = (p, q, t) => {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                if (t < 1/6) return p + (q - p) * 6 * t;
+                if (t < 1/2) return q;
+                if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                return p;
+            };
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1/3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1/3);
+        }
+        return [r, g, b];
+    }
+
+    // ========================================================================
+    // Agent 3D Rendering
+    // ========================================================================
+
+    _updateAgentMeshes() {
+        if (!this.crowdSim) return;
+
+        const currentAgentIds = new Set(Object.keys(this.crowdSim.agents));
+
+        // Remove meshes for agents that no longer exist
+        for (const [agentId, meshData] of this.agentMeshes) {
+            if (!currentAgentIds.has(agentId)) {
+                this._removeAgentMesh(meshData);
+                this.agentMeshes.delete(agentId);
+            }
+        }
+
+        // Update or create meshes for current agents
+        for (const [agentId, agent] of Object.entries(this.crowdSim.agents)) {
+            const isSelected = this.selectedAgents.has(agentId);
+            const isLarge = agent.radius > SMALL_RADIUS * 1.5;
+            let meshData = this.agentMeshes.get(agentId);
+
+            if (!meshData) {
+                meshData = this._createAgentMesh(agent, isLarge);
+                this.agentMeshes.set(agentId, meshData);
+            }
+
+            // Update position
+            const y = agent.radius;
+            meshData.sphere.position.set(agent.position[0], y, agent.position[2]);
+
+            // Update color
+            let color;
+            if (isSelected) {
+                color = 0xe94560;
+            } else if (isLarge) {
+                color = 0xd97706;
+            } else {
+                color = 0x4a90d9;
+            }
+            meshData.sphere.material.color.setHex(color);
+            meshData.sphere.material.emissive.setHex(isSelected ? 0x440015 : 0x000000);
+
+            // Direction line
+            const velLen = Math.sqrt(agent.velocity[0] ** 2 + agent.velocity[2] ** 2);
+            if (velLen > 0.1) {
+                const dirX = agent.velocity[0] / velLen;
+                const dirZ = agent.velocity[2] / velLen;
+                const linePositions = meshData.directionLine.geometry.attributes.position.array;
+                linePositions[0] = agent.position[0];
+                linePositions[1] = y;
+                linePositions[2] = agent.position[2];
+                linePositions[3] = agent.position[0] + dirX * agent.radius * 1.5;
+                linePositions[4] = y;
+                linePositions[5] = agent.position[2] + dirZ * agent.radius * 1.5;
+                meshData.directionLine.geometry.attributes.position.needsUpdate = true;
+                meshData.directionLine.visible = true;
+            } else {
+                meshData.directionLine.visible = false;
+            }
+
+            // Path line
+            if (agent.corners && agent.corners.length > 0) {
+                this._updatePathLine(meshData, agent);
+                meshData.pathLine.visible = true;
+            } else {
+                meshData.pathLine.visible = false;
+            }
+
+            // Target line and sphere
+            if (agent.targetState === crowd.AgentTargetState.VALID) {
+                this._updateTargetVis(meshData, agent);
+                meshData.targetLine.visible = true;
+                meshData.targetSphere.visible = true;
+            } else {
+                meshData.targetLine.visible = false;
+                meshData.targetSphere.visible = false;
+            }
+        }
+    }
+
+    _createAgentMesh(agent, isLarge) {
+        const geom = isLarge ? this._largeSphereGeom : this._smallSphereGeom;
+        const mat = new THREE.MeshPhongMaterial({ color: 0x4a90d9 });
+        const sphere = new THREE.Mesh(geom, mat);
+        this.scene.add(sphere);
+
+        // Direction line
+        const dirGeom = new THREE.BufferGeometry();
+        dirGeom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+        const dirLine = new THREE.Line(dirGeom, new THREE.LineBasicMaterial({ color: 0xffffff }));
+        dirLine.visible = false;
+        this.scene.add(dirLine);
+
+        // Path line (dynamic vertex count)
+        const pathGeom = new THREE.BufferGeometry();
+        pathGeom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(300), 3)); // max 100 corners
+        pathGeom.setDrawRange(0, 0);
+        const pathLine = new THREE.Line(pathGeom, new THREE.LineBasicMaterial({ color: 0x64c864, transparent: true, opacity: 0.6 }));
+        pathLine.visible = false;
+        this.scene.add(pathLine);
+
+        // Target line
+        const targetGeom = new THREE.BufferGeometry();
+        targetGeom.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+        const targetLine = new THREE.Line(targetGeom, new THREE.LineBasicMaterial({
+            color: 0xff6464,
+            transparent: true,
+            opacity: 0.5,
+        }));
+        targetLine.visible = false;
+        this.scene.add(targetLine);
+
+        // Target sphere
+        const targetSphereGeom = new THREE.SphereGeometry(0.2, 8, 6);
+        const targetSphere = new THREE.Mesh(targetSphereGeom, new THREE.MeshPhongMaterial({
+            color: 0xff4444,
+            transparent: true,
+            opacity: 0.6,
+        }));
+        targetSphere.visible = false;
+        this.scene.add(targetSphere);
+
+        return { sphere, directionLine: dirLine, pathLine, targetLine, targetSphere };
+    }
+
+    _updatePathLine(meshData, agent) {
+        const posArr = meshData.pathLine.geometry.attributes.position.array;
+        const y = agent.radius;
+        let idx = 0;
+
+        // Start from agent position
+        posArr[idx++] = agent.position[0];
+        posArr[idx++] = y;
+        posArr[idx++] = agent.position[2];
+
+        const maxCorners = Math.min(agent.corners.length, 99);
+        for (let i = 0; i < maxCorners; i++) {
+            posArr[idx++] = agent.corners[i].position[0];
+            posArr[idx++] = y;
+            posArr[idx++] = agent.corners[i].position[2];
+        }
+
+        meshData.pathLine.geometry.attributes.position.needsUpdate = true;
+        meshData.pathLine.geometry.setDrawRange(0, 1 + maxCorners);
+    }
+
+    _updateTargetVis(meshData, agent) {
+        const y = agent.radius;
+        const posArr = meshData.targetLine.geometry.attributes.position.array;
+        posArr[0] = agent.position[0];
+        posArr[1] = y;
+        posArr[2] = agent.position[2];
+        posArr[3] = agent.targetPosition[0];
+        posArr[4] = 0.2;
+        posArr[5] = agent.targetPosition[2];
+        meshData.targetLine.geometry.attributes.position.needsUpdate = true;
+
+        meshData.targetSphere.position.set(agent.targetPosition[0], 0.2, agent.targetPosition[2]);
+    }
+
+    _removeAgentMesh(meshData) {
+        for (const key of ['sphere', 'directionLine', 'pathLine', 'targetLine', 'targetSphere']) {
+            const obj = meshData[key];
+            this.scene.remove(obj);
+            if (obj.geometry && obj.geometry !== this._smallSphereGeom && obj.geometry !== this._largeSphereGeom) {
+                obj.geometry.dispose();
+            }
+            if (obj.material) obj.material.dispose();
+        }
+    }
+
+    // ========================================================================
+    // Raycasting Input
+    // ========================================================================
+
+    _getWorldPosFromMouse(event) {
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+        const target = new THREE.Vector3();
+        const hit = this.raycaster.ray.intersectPlane(this.groundPlane, target);
+        if (hit) {
+            return { x: target.x, y: target.z }; // format expected by addAgent/moveAgentsToTarget
+        }
+        return null;
+    }
+
+    _getAgentAtClick(event) {
+        if (!this.crowdSim) return null;
+
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        this.raycaster.setFromCamera(this.mouse, this.camera);
+
+        // Collect all agent spheres
+        const spheres = [];
+        const agentIds = [];
+        for (const [agentId, meshData] of this.agentMeshes) {
+            spheres.push(meshData.sphere);
+            agentIds.push(agentId);
+        }
+
+        const intersects = this.raycaster.intersectObjects(spheres);
+        if (intersects.length > 0) {
+            const idx = spheres.indexOf(intersects[0].object);
+            if (idx >= 0) return agentIds[idx];
+        }
+        return null;
+    }
+
+    _projectToScreen(position3D) {
+        const v = new THREE.Vector3(position3D[0], position3D[1] || 0, position3D[2]);
+        v.project(this.camera);
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        return {
+            x: (v.x * 0.5 + 0.5) * rect.width,
+            y: (-v.y * 0.5 + 0.5) * rect.height
+        };
+    }
+
+    // ========================================================================
+    // Mouse Event Handlers
+    // ========================================================================
+
+    onMouseDown(e) {
+        if (e.button === 0 && e.shiftKey) {
+            // Shift + left click: add large agent
+            const worldPos = this._getWorldPosFromMouse(e);
+            if (worldPos) this.addAgent(worldPos, true);
+        } else if (e.button === 0) {
+            // Left click: check for agent selection or start rect selection
+            const clickedAgent = this._getAgentAtClick(e);
+
+            if (clickedAgent) {
+                this.selectedAgents.clear();
+                this.selectedAgents.add(clickedAgent);
+                this.updateUI();
+            } else {
+                // Start rectangle selection
+                this.isSelecting = true;
+                const rect = this.renderer.domElement.getBoundingClientRect();
+                this.selectionStart = {
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top
+                };
+                this.selectionRect = {
+                    x1: this.selectionStart.x,
+                    y1: this.selectionStart.y,
+                    x2: this.selectionStart.x,
+                    y2: this.selectionStart.y
+                };
+            }
+        } else if (e.button === 2) {
+            // Right click: move selected agents or add small agent
+            const worldPos = this._getWorldPosFromMouse(e);
+            if (worldPos) {
+                if (this.selectedAgents.size > 0) {
+                    this.moveAgentsToTarget(worldPos);
+                } else {
+                    this.addAgent(worldPos, false);
+                }
+            }
+            this.updateUI();
+        }
+    }
+
+    onMouseMove(e) {
+        if (this.isSelecting) {
+            const rect = this.renderer.domElement.getBoundingClientRect();
+            this.selectionRect.x2 = e.clientX - rect.left;
+            this.selectionRect.y2 = e.clientY - rect.top;
+
+            // Update visual selection div
+            const minX = Math.min(this.selectionRect.x1, this.selectionRect.x2);
+            const minY = Math.min(this.selectionRect.y1, this.selectionRect.y2);
+            const w = Math.abs(this.selectionRect.x2 - this.selectionRect.x1);
+            const h = Math.abs(this.selectionRect.y2 - this.selectionRect.y1);
+            this.selectionDiv.style.display = 'block';
+            this.selectionDiv.style.left = minX + 'px';
+            this.selectionDiv.style.top = minY + 'px';
+            this.selectionDiv.style.width = w + 'px';
+            this.selectionDiv.style.height = h + 'px';
+        }
+    }
+
+    onMouseUp(e) {
+        if (this.isSelecting && this.selectionRect) {
+            const minX = Math.min(this.selectionRect.x1, this.selectionRect.x2);
+            const maxX = Math.max(this.selectionRect.x1, this.selectionRect.x2);
+            const minY = Math.min(this.selectionRect.y1, this.selectionRect.y2);
+            const maxY = Math.max(this.selectionRect.y1, this.selectionRect.y2);
+
+            const width = maxX - minX;
+            const height = maxY - minY;
+
+            if (width > 5 || height > 5) {
+                // Rectangle selection: project agent positions to screen
+                if (!e.shiftKey) {
+                    this.selectedAgents.clear();
+                }
+
+                if (this.crowdSim) {
+                    for (const [agentId, agent] of Object.entries(this.crowdSim.agents)) {
+                        const screen = this._projectToScreen(agent.position);
+                        if (screen.x >= minX && screen.x <= maxX &&
+                            screen.y >= minY && screen.y <= maxY) {
+                            this.selectedAgents.add(agentId);
+                        }
+                    }
+                }
+            } else {
+                // Small drag = click - add agent at position
+                const worldPos = this._getWorldPosFromMouse(e);
+                if (worldPos && !this._getAgentAtClick(e)) {
+                    this.addAgent(worldPos, false);
+                }
+            }
+
+            this.selectionDiv.style.display = 'none';
+        }
+
+        this.isSelecting = false;
+        this.selectionRect = null;
+        this.updateUI();
+    }
+
+    // ========================================================================
+    // Camera
+    // ========================================================================
+
+    centerCamera() {
+        if (!this.renderVertices || this.renderVertices.length === 0) return;
+
+        let minX = Infinity, maxX = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+
+        const numVerts = this.renderVertices.length / 3;
+        for (let i = 0; i < numVerts; i++) {
+            const x = this.renderVertices[i * 3];
+            const z = this.renderVertices[i * 3 + 2];
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minZ = Math.min(minZ, z);
+            maxZ = Math.max(maxZ, z);
+        }
+
+        const cx = (minX + maxX) / 2;
+        const cz = (minZ + maxZ) / 2;
+        const dx = maxX - minX;
+        const dz = maxZ - minZ;
+        const dist = Math.max(dx, dz) * 1.2;
+
+        this.camera.position.set(cx + dist * 0.5, dist * 0.7, cz + dist * 0.5);
+        this.controls.target.set(cx, 0, cz);
+        this.controls.update();
     }
 
     // ========================================================================
     // Generazione NavMesh con pipeline personalizzata (multi-agent)
     // ========================================================================
 
-    /**
-     * Genera un tile dalla mesh data (positions/indices) senza creare un nuovo navmesh.
-     * Esegue tutta la pipeline: markWalkableTriangles → rasterize → filter → compact →
-     * erode → regions → contours → polyMesh → buildTile.
-     */
     _buildTileFromMesh(positions, indices) {
         const ctx = BuildContext.create();
         BuildContext.start(ctx, 'navmesh generation');
@@ -294,9 +914,6 @@ class CrowdSimulationApp {
 
         BuildContext.end(ctx, 'navmesh generation');
 
-        const cs_ = cs;
-        const ch_ = ch;
-
         const tilePolys = polyMeshToTilePolys(polyMesh);
         const tileDetailMesh = polyMeshDetailToTileDetailMesh(tilePolys.polys, polyMeshDetail);
 
@@ -310,8 +927,8 @@ class CrowdSimulationApp {
             tileX: 0,
             tileY: 0,
             tileLayer: 0,
-            cellSize: cs_,
-            cellHeight: ch_,
+            cellSize: cs,
+            cellHeight: ch,
             walkableHeight: 2.0,
             walkableRadius: SMALL_RADIUS,
             walkableClimb: 0.5,
@@ -338,9 +955,6 @@ class CrowdSimulationApp {
     // Combinazione mesh strutturata
     // ========================================================================
 
-    /**
-     * Combina ground + strutture abilitate + obstacles in positions/indices flat.
-     */
     _combineMeshData() {
         const data = this.structuredMeshData;
         if (!data) return null;
@@ -348,7 +962,6 @@ class CrowdSimulationApp {
         const positions = [];
         const indices = [];
 
-        // Ground
         for (let i = 0; i < data.ground.positions.length; i++) {
             positions.push(data.ground.positions[i]);
         }
@@ -356,7 +969,6 @@ class CrowdSimulationApp {
             indices.push(data.ground.indices[i]);
         }
 
-        // Structures (solo quelle abilitate)
         for (const s of data.structures) {
             if (this.disabledStructures.has(s.id)) continue;
             const offset = positions.length / 3;
@@ -368,7 +980,6 @@ class CrowdSimulationApp {
             }
         }
 
-        // Static obstacles
         if (data.staticObstacles.positions.length > 0) {
             const offset = positions.length / 3;
             for (let i = 0; i < data.staticObstacles.positions.length; i++) {
@@ -382,11 +993,6 @@ class CrowdSimulationApp {
         return { positions, indices };
     }
 
-    /**
-     * Ricostruisce la navmesh in modo asincrono, sostituendo il tile esistente
-     * senza ricreare il crowd. Gli agenti sopravvivono e i loro path vengono
-     * rivalidati automaticamente da checkPathValidity() in crowd.update().
-     */
     rebuildNavMesh() {
         const combined = this._combineMeshData();
         if (!combined || combined.positions.length < 9 || combined.indices.length < 3) {
@@ -408,13 +1014,9 @@ class CrowdSimulationApp {
         });
     }
 
-    /**
-     * Callback quando il worker completa il calcolo del tile.
-     */
     _onWorkerResult(e) {
         const { tile, error, generationId } = e.data;
 
-        // Ignora risultati di generazioni precedenti (stale)
         if (generationId !== this._navMeshGeneration) {
             console.log(`Ignoring stale navmesh result (gen ${generationId}, current ${this._navMeshGeneration})`);
             return;
@@ -428,11 +1030,9 @@ class CrowdSimulationApp {
             return;
         }
 
-        // Rimuovi il tile esistente e aggiungi quello nuovo
         removeTile(this.navMesh, 0, 0, 0);
         addTile(this.navMesh, tile);
 
-        // Assegna flags univoci ai poligoni
         for (const tileId of Object.keys(this.navMesh.tiles)) {
             const t = this.navMesh.tiles[tileId];
             for (let i = 0; i < t.polys.length; i++) {
@@ -442,7 +1042,6 @@ class CrowdSimulationApp {
             }
         }
 
-        // Ri-aggiungi connessioni off-mesh
         for (const conn of this.jsonOffMeshConnections) {
             addOffMeshConnection(this.navMesh, {
                 start: conn.start,
@@ -456,20 +1055,15 @@ class CrowdSimulationApp {
             });
         }
 
-        // Flood fill pruning
         this._floodFillPrune();
 
-        // NON ricreare il crowd - gli agenti sopravvivono
-
         this._extractRenderData();
+        this._rebuildNavMeshGeometry();
         const narrowCount = this._countNarrowPolys();
         const agentCount = this.crowdSim ? Object.keys(this.crowdSim.agents).length : 0;
         this.setStatus(`NavMesh rigenerata: ${this.renderPolygons.length} poligoni (${narrowCount} narrow), ${agentCount} agenti preservati`);
     }
 
-    /**
-     * Flood fill pruning: disabilita i poligoni non raggiungibili dai seed points.
-     */
     _floodFillPrune() {
         if (!this.jsonSeedPoints || this.jsonSeedPoints.length === 0) return;
 
@@ -507,9 +1101,6 @@ class CrowdSimulationApp {
         console.log(`Flood fill: ${startRefs.length} seeds, ${unreachable.length} unreachable polys disabled`);
     }
 
-    /**
-     * Conta poligoni narrow nella navmesh.
-     */
     _countNarrowPolys() {
         let count = 0;
         for (const tileId of Object.keys(this.navMesh.tiles)) {
@@ -526,7 +1117,6 @@ class CrowdSimulationApp {
     // ========================================================================
 
     loadMesh3D(json) {
-        // Detect formato: nuovo se json.ground esiste
         if (json.ground) {
             // --- Formato strutturato ---
             this.structuredMeshData = json;
@@ -554,7 +1144,6 @@ class CrowdSimulationApp {
             this.navMesh = navMesh;
             console.log('NavMesh generated successfully');
 
-            // Assegna flags univoci
             for (const tileId of Object.keys(this.navMesh.tiles)) {
                 const tile = this.navMesh.tiles[tileId];
                 for (let i = 0; i < tile.polys.length; i++) {
@@ -564,7 +1153,6 @@ class CrowdSimulationApp {
                 }
             }
 
-            // Off-mesh connections
             for (const conn of this.jsonOffMeshConnections) {
                 const connId = addOffMeshConnection(this.navMesh, {
                     start: conn.start,
@@ -580,15 +1168,18 @@ class CrowdSimulationApp {
                 console.log(`OffMesh connection ${connId}: connected=${connected}`, conn);
             }
 
-            // Flood fill pruning
             this._floodFillPrune();
 
             this.crowdSim = crowd.create(LARGE_RADIUS);
             this.selectedAgents.clear();
+            this._clearAllAgentMeshes();
             this._extractRenderData();
+            this._rebuildSceneGeometry();
+            this._rebuildNavMeshGeometry();
             this.centerCamera();
 
             this._buildStructurePanel();
+            this._spawnStartingAgent(json.startingPosition);
             const narrowCount = this._countNarrowPolys();
             this.setStatus(`NavMesh generata: ${this.renderPolygons.length} poligoni (${narrowCount} narrow), ${json.structures.length} strutture`);
 
@@ -647,17 +1238,18 @@ class CrowdSimulationApp {
 
             this.crowdSim = crowd.create(LARGE_RADIUS);
             this.selectedAgents.clear();
+            this._clearAllAgentMeshes();
             this._extractRenderData();
+            this._rebuildSceneGeometry();
+            this._rebuildNavMeshGeometry();
             this.centerCamera();
 
+            this._spawnStartingAgent(json.startingPosition);
             const narrowCount = this._countNarrowPolys();
             this.setStatus(`NavMesh generata: ${this.renderPolygons.length} poligoni (${narrowCount} narrow), ${this.navMesh.nodes.length} nodi`);
         }
     }
 
-    /**
-     * Estrae vertici e poligoni dalla tile della navmesh per il rendering 2D.
-     */
     _extractRenderData() {
         this.renderVertices = [];
         this.renderPolygons = [];
@@ -676,6 +1268,22 @@ class CrowdSimulationApp {
                 });
             }
         }
+    }
+
+    isSharedEdge(v1Idx, v2Idx) {
+        let count = 0;
+        for (let pi = 0; pi < this.renderPolygons.length; pi++) {
+            const verts = this.renderPolygons[pi].vertices;
+            for (let i = 0; i < verts.length; i++) {
+                const a = verts[i];
+                const b = verts[(i + 1) % verts.length];
+                if ((a === v1Idx && b === v2Idx) || (a === v2Idx && b === v1Idx)) {
+                    count++;
+                    if (count > 1) return true;
+                }
+            }
+        }
+        return false;
     }
 
     // ========================================================================
@@ -711,6 +1319,7 @@ class CrowdSimulationApp {
                     this.disabledStructures.add(s.id);
                 }
                 this.rebuildNavMesh();
+                this._rebuildSceneGeometry();
             });
 
             const label = document.createElement('label');
@@ -769,36 +1378,19 @@ class CrowdSimulationApp {
             });
     }
 
-    centerCamera() {
-        if (!this.renderVertices || this.renderVertices.length === 0) return;
-
-        let minX = Infinity, maxX = -Infinity;
-        let minZ = Infinity, maxZ = -Infinity;
-
-        const numVerts = this.renderVertices.length / 3;
-        for (let i = 0; i < numVerts; i++) {
-            const x = this.renderVertices[i * 3];
-            const z = this.renderVertices[i * 3 + 2];
-            minX = Math.min(minX, x);
-            maxX = Math.max(maxX, x);
-            minZ = Math.min(minZ, z);
-            maxZ = Math.max(maxZ, z);
-        }
-
-        this.camera.x = (minX + maxX) / 2;
-        this.camera.y = (minZ + maxZ) / 2;
-
-        const width = maxX - minX;
-        const height = maxZ - minZ;
-        const maxDim = Math.max(width, height);
-        if (maxDim > 0) {
-            this.camera.zoom = Math.min(this.canvas.width, this.canvas.height) / (maxDim * 1.2);
-        }
-    }
-
     // ========================================================================
     // Gestione Agenti
     // ========================================================================
+
+    _spawnStartingAgent(startingPosition) {
+        if (!startingPosition) return;
+        // startingPosition is [x, 0, z] from the exported JSON
+        const worldPos = { x: startingPosition[0], y: startingPosition[2] };
+        const agentId = this.addAgent(worldPos, false);
+        if (agentId) {
+            console.log('Starting agent spawned at', startingPosition);
+        }
+    }
 
     addAgent(worldPos, large = false) {
         if (!this.navMesh || !this.crowdSim) {
@@ -890,151 +1482,20 @@ class CrowdSimulationApp {
             crowd.removeAgent(this.crowdSim, agentId);
         }
 
+        this._clearAllAgentMeshes();
         this.selectedAgents.clear();
         this.updateUI();
     }
 
-    // ========================================================================
-    // Input Mouse
-    // ========================================================================
-
-    screenToWorld(sx, sy) {
-        const cx = this.canvas.width / 2;
-        const cy = this.canvas.height / 2;
-        return {
-            x: (sx - cx) / this.camera.zoom + this.camera.x,
-            y: (sy - cy) / this.camera.zoom + this.camera.y
-        };
-    }
-
-    worldToScreen(wx, wy) {
-        const cx = this.canvas.width / 2;
-        const cy = this.canvas.height / 2;
-        return {
-            x: (wx - this.camera.x) * this.camera.zoom + cx,
-            y: (wy - this.camera.y) * this.camera.zoom + cy
-        };
-    }
-
-    getAgentAtPosition(worldPos) {
-        if (!this.crowdSim) return null;
-
-        for (const [agentId, agent] of Object.entries(this.crowdSim.agents)) {
-            const dx = agent.position[0] - worldPos.x;
-            const dz = agent.position[2] - worldPos.y;
-            const dist = Math.sqrt(dx * dx + dz * dz);
-
-            if (dist < agent.radius * 1.5) {
-                return agentId;
-            }
+    _clearAllAgentMeshes() {
+        for (const [, meshData] of this.agentMeshes) {
+            this._removeAgentMesh(meshData);
         }
-
-        return null;
-    }
-
-    onMouseDown(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        const sx = e.clientX - rect.left;
-        const sy = e.clientY - rect.top;
-        const worldPos = this.screenToWorld(sx, sy);
-
-        this.dragStart = { x: sx, y: sy, worldX: worldPos.x, worldY: worldPos.y };
-
-        if (e.button === 1) {
-            this.isPanning = true;
-            this.canvas.style.cursor = 'grabbing';
-        } else if (e.button === 0 && e.shiftKey) {
-            // Shift + click sinistro: crea agente grande
-            this.addAgent(worldPos, true);
-        } else if (e.button === 0) {
-            // Click sinistro: selezione o creazione agente piccolo
-            const clickedAgent = this.getAgentAtPosition(worldPos);
-
-            if (clickedAgent) {
-                this.selectedAgents.clear();
-                this.selectedAgents.add(clickedAgent);
-            } else {
-                this.isSelecting = true;
-                this.selectionRect = { x1: sx, y1: sy, x2: sx, y2: sy };
-            }
-        } else if (e.button === 2) {
-            if (this.selectedAgents.size > 0) {
-                this.moveAgentsToTarget(worldPos);
-            } else {
-                this.addAgent(worldPos, false);
-            }
-        }
-
-        this.updateUI();
-    }
-
-    onMouseMove(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        const sx = e.clientX - rect.left;
-        const sy = e.clientY - rect.top;
-
-        if (this.isPanning) {
-            const dx = (sx - this.dragStart.x) / this.camera.zoom;
-            const dy = (sy - this.dragStart.y) / this.camera.zoom;
-            this.camera.x -= dx;
-            this.camera.y -= dy;
-            this.dragStart.x = sx;
-            this.dragStart.y = sy;
-        } else if (this.isSelecting) {
-            this.selectionRect.x2 = sx;
-            this.selectionRect.y2 = sy;
-        }
-    }
-
-    onMouseUp(e) {
-        if (this.isSelecting && this.selectionRect) {
-            const minX = Math.min(this.selectionRect.x1, this.selectionRect.x2);
-            const maxX = Math.max(this.selectionRect.x1, this.selectionRect.x2);
-            const minY = Math.min(this.selectionRect.y1, this.selectionRect.y2);
-            const maxY = Math.max(this.selectionRect.y1, this.selectionRect.y2);
-
-            const width = maxX - minX;
-            const height = maxY - minY;
-
-            if (width > 5 || height > 5) {
-                if (!e.shiftKey) {
-                    this.selectedAgents.clear();
-                }
-
-                if (this.crowdSim) {
-                    for (const [agentId, agent] of Object.entries(this.crowdSim.agents)) {
-                        const screen = this.worldToScreen(agent.position[0], agent.position[2]);
-                        if (screen.x >= minX && screen.x <= maxX &&
-                            screen.y >= minY && screen.y <= maxY) {
-                            this.selectedAgents.add(agentId);
-                        }
-                    }
-                }
-            } else if (width < 5 && height < 5) {
-                const worldPos = this.screenToWorld(this.selectionRect.x1, this.selectionRect.y1);
-                if (!this.getAgentAtPosition(worldPos)) {
-                    this.addAgent(worldPos, false);
-                }
-            }
-        }
-
-        this.isPanning = false;
-        this.isSelecting = false;
-        this.selectionRect = null;
-        this.canvas.style.cursor = 'default';
-
-        this.updateUI();
-    }
-
-    onWheel(e) {
-        e.preventDefault();
-        const factor = e.deltaY > 0 ? 0.9 : 1.1;
-        this.camera.zoom *= factor;
-        this.camera.zoom = Math.max(1, Math.min(100, this.camera.zoom));
+        this.agentMeshes.clear();
     }
 
     // ========================================================================
-    // Update e Rendering
+    // Game Loop
     // ========================================================================
 
     update(dt) {
@@ -1044,238 +1505,10 @@ class CrowdSimulationApp {
     }
 
     render() {
-        const ctx = this.ctx;
-
-        ctx.fillStyle = '#1a1a2e';
-        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        ctx.save();
-
-        ctx.translate(this.canvas.width / 2, this.canvas.height / 2);
-        ctx.scale(this.camera.zoom, this.camera.zoom);
-        ctx.translate(-this.camera.x, -this.camera.y);
-
-        this.renderNavMesh(ctx);
-        this.renderAgents(ctx);
-
-        ctx.restore();
-
-        if (this.isSelecting && this.selectionRect) {
-            ctx.strokeStyle = '#e94560';
-            ctx.lineWidth = 1;
-            ctx.setLineDash([5, 5]);
-            ctx.strokeRect(
-                this.selectionRect.x1,
-                this.selectionRect.y1,
-                this.selectionRect.x2 - this.selectionRect.x1,
-                this.selectionRect.y2 - this.selectionRect.y1
-            );
-            ctx.setLineDash([]);
-        }
+        this._updateAgentMeshes();
+        this.controls.update();
+        this.renderer.render(this.scene, this.camera);
     }
-
-    renderNavMesh(ctx) {
-        if (this.renderPolygons.length === 0) return;
-
-        const verts = this.renderVertices;
-
-        for (let i = 0; i < this.renderPolygons.length; i++) {
-            const poly = this.renderPolygons[i];
-            if (poly.flags === 0) continue; // pruned by flood fill
-            const isNarrow = poly.area === AREA_WALKABLE_NARROW;
-
-            ctx.beginPath();
-            for (let j = 0; j < poly.vertices.length; j++) {
-                const vi = poly.vertices[j];
-                const x = verts[vi * 3];
-                const z = verts[vi * 3 + 2];
-                if (j === 0) {
-                    ctx.moveTo(x, z);
-                } else {
-                    ctx.lineTo(x, z);
-                }
-            }
-            ctx.closePath();
-
-            if (isNarrow) {
-                ctx.fillStyle = `hsla(30, 50%, 25%, 0.5)`;
-            } else {
-                ctx.fillStyle = `hsla(${200 + (i * 17) % 60}, 50%, 30%, 0.5)`;
-            }
-            ctx.fill();
-
-            ctx.strokeStyle = isNarrow ? '#886633' : '#0f3460';
-            ctx.lineWidth = 0.1;
-            ctx.stroke();
-        }
-
-        // Muri (bordi non condivisi)
-        ctx.strokeStyle = '#e94560';
-        ctx.lineWidth = 0.15;
-
-        for (let pi = 0; pi < this.renderPolygons.length; pi++) {
-            const poly = this.renderPolygons[pi];
-            const polyVerts = poly.vertices;
-
-            for (let j = 0; j < polyVerts.length; j++) {
-                const v1i = polyVerts[j];
-                const v2i = polyVerts[(j + 1) % polyVerts.length];
-
-                const isWall = !this.isSharedEdge(v1i, v2i);
-
-                if (isWall) {
-                    const v1x = verts[v1i * 3];
-                    const v1z = verts[v1i * 3 + 2];
-                    const v2x = verts[v2i * 3];
-                    const v2z = verts[v2i * 3 + 2];
-
-                    ctx.beginPath();
-                    ctx.moveTo(v1x, v1z);
-                    ctx.lineTo(v2x, v2z);
-                    ctx.stroke();
-                }
-            }
-        }
-
-        // Connessioni off-mesh
-        for (const conn of this.jsonOffMeshConnections) {
-            const sx = conn.start[0], sz = conn.start[2];
-            const ex = conn.end[0], ez = conn.end[2];
-
-            ctx.beginPath();
-            ctx.moveTo(sx, sz);
-            ctx.lineTo(ex, ez);
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 0.15;
-            ctx.setLineDash([0.3, 0.2]);
-            ctx.stroke();
-            ctx.setLineDash([]);
-
-            const dx = ex - sx, dz = ez - sz;
-            const len = Math.hypot(dx, dz);
-            if (len > 0) {
-                const nx = dx / len, nz = dz / len;
-                const as = 0.4;
-                ctx.beginPath();
-                ctx.moveTo(ex, ez);
-                ctx.lineTo(ex - nx * as - nz * as * 0.5, ez - nz * as + nx * as * 0.5);
-                ctx.lineTo(ex - nx * as + nz * as * 0.5, ez - nz * as - nx * as * 0.5);
-                ctx.closePath();
-                ctx.fillStyle = '#f59e0b';
-                ctx.fill();
-            }
-
-            ctx.beginPath();
-            ctx.arc(sx, sz, 0.25, 0, Math.PI * 2);
-            ctx.fillStyle = '#22c55e';
-            ctx.fill();
-
-            ctx.beginPath();
-            ctx.arc(ex, ez, 0.25, 0, Math.PI * 2);
-            ctx.fillStyle = '#ef4444';
-            ctx.fill();
-        }
-    }
-
-    isSharedEdge(v1Idx, v2Idx) {
-        let count = 0;
-        for (let pi = 0; pi < this.renderPolygons.length; pi++) {
-            const verts = this.renderPolygons[pi].vertices;
-            for (let i = 0; i < verts.length; i++) {
-                const a = verts[i];
-                const b = verts[(i + 1) % verts.length];
-                if ((a === v1Idx && b === v2Idx) || (a === v2Idx && b === v1Idx)) {
-                    count++;
-                    if (count > 1) return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    renderAgents(ctx) {
-        if (!this.crowdSim) return;
-
-        for (const [agentId, agent] of Object.entries(this.crowdSim.agents)) {
-            const x = agent.position[0];
-            const z = agent.position[2];
-            const radius = agent.radius;
-            const isLarge = radius > SMALL_RADIUS * 1.5;
-
-            const isSelected = this.selectedAgents.has(agentId);
-
-            // Corpo
-            ctx.beginPath();
-            ctx.arc(x, z, radius, 0, Math.PI * 2);
-            if (isSelected) {
-                ctx.fillStyle = '#e94560';
-            } else if (isLarge) {
-                ctx.fillStyle = '#d97706';
-            } else {
-                ctx.fillStyle = '#4a90d9';
-            }
-            ctx.fill();
-
-            // Bordo
-            ctx.strokeStyle = isSelected ? '#fff' : (isLarge ? '#92400e' : '#2a5080');
-            ctx.lineWidth = 0.08;
-            ctx.stroke();
-
-            // Direzione velocità
-            const velLen = Math.sqrt(agent.velocity[0] ** 2 + agent.velocity[2] ** 2);
-            if (velLen > 0.1) {
-                const dirX = agent.velocity[0] / velLen;
-                const dirZ = agent.velocity[2] / velLen;
-
-                ctx.beginPath();
-                ctx.moveTo(x, z);
-                ctx.lineTo(x + dirX * radius * 1.5, z + dirZ * radius * 1.5);
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 0.06;
-                ctx.stroke();
-            }
-
-            // Percorso (corners)
-            if (agent.corners && agent.corners.length > 0) {
-                ctx.strokeStyle = 'rgba(100, 200, 100, 0.5)';
-                ctx.lineWidth = 0.05;
-                ctx.beginPath();
-                ctx.moveTo(x, z);
-                for (const corner of agent.corners) {
-                    ctx.lineTo(corner.position[0], corner.position[2]);
-                }
-                ctx.stroke();
-
-                ctx.fillStyle = 'rgba(100, 200, 100, 0.8)';
-                for (const corner of agent.corners) {
-                    ctx.beginPath();
-                    ctx.arc(corner.position[0], corner.position[2], 0.15, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-
-            // Target
-            if (agent.targetState === crowd.AgentTargetState.VALID) {
-                ctx.strokeStyle = 'rgba(255, 100, 100, 0.5)';
-                ctx.lineWidth = 0.03;
-                ctx.setLineDash([0.2, 0.2]);
-                ctx.beginPath();
-                ctx.moveTo(x, z);
-                ctx.lineTo(agent.targetPosition[0], agent.targetPosition[2]);
-                ctx.stroke();
-                ctx.setLineDash([]);
-
-                ctx.fillStyle = 'rgba(255, 100, 100, 0.5)';
-                ctx.beginPath();
-                ctx.arc(agent.targetPosition[0], agent.targetPosition[2], 0.2, 0, Math.PI * 2);
-                ctx.fill();
-            }
-        }
-    }
-
-    // ========================================================================
-    // Game Loop
-    // ========================================================================
 
     startLoop() {
         const loop = (time) => {

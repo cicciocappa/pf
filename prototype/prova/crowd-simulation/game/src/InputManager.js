@@ -52,7 +52,11 @@ export class InputManager {
                 this.game.onRightClick(world);
             } else if (e.button === 0) {
                 // Left click
-                if (this.activeSpell) {
+                if (this.game.summonMode) {
+                    // Summon mode attivo: intercetta click prima di spell/drag
+                    this.game.summonAt(world.x, world.y);
+                    c.style.cursor = 'default';
+                } else if (this.activeSpell) {
                     this.game.onCastSpell(this.activeSpell, world);
                     this.activeSpell = null;
                     c.style.cursor = 'default';
@@ -99,20 +103,24 @@ export class InputManager {
                 this.canvas.style.cursor = 'crosshair';
             }
 
-            // Evoca creature
+            // Evoca creature (summon mode)
             if (e.key === 'g' || e.key === 'G') {
-                this.game.onSummonCreature('GIANT');
+                this.game.enterSummonMode('GIANT');
+                this.canvas.style.cursor = this.game.summonMode ? 'crosshair' : 'default';
             }
             if (e.key === 'l' || e.key === 'L') {
-                this.game.onSummonCreature('LARVA');
+                this.game.enterSummonMode('LARVA');
+                this.canvas.style.cursor = this.game.summonMode ? 'crosshair' : 'default';
             }
             if (e.key === 'e' || e.key === 'E') {
-                this.game.onSummonCreature('ELEMENTAL');
+                this.game.enterSummonMode('ELEMENTAL');
+                this.canvas.style.cursor = this.game.summonMode ? 'crosshair' : 'default';
             }
 
-            // Annulla spell
+            // Annulla spell o summon
             if (e.key === 'Escape') {
                 this.activeSpell = null;
+                this.game.cancelSummon();
                 this.canvas.style.cursor = 'default';
             }
         });

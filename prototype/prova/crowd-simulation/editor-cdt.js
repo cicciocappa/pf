@@ -961,12 +961,18 @@ export function exportMesh3D(editorData) {
     // --- 5. Seed points per flood fill ---
     const seedPoints3D = (editorData.seedPoints || []).map(p => [p[0], 0, p[1]]);
 
+    // --- 6. Starting position ---
+    const startingPosition = editorData.startingPosition
+        ? [editorData.startingPosition[0], 0, editorData.startingPosition[1]]
+        : null;
+
     return {
         ground: { positions: groundPositions, indices: groundIndices },
         structures,
         staticObstacles: { positions: obsPositions, indices: obsIndices },
         offMeshConnections: outLinks,
-        seedPoints: seedPoints3D
+        seedPoints: seedPoints3D,
+        startingPosition
     };
 }
 
