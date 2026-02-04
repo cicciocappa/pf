@@ -21,12 +21,12 @@ export class EditorRenderer {
         ctx.translate(-this.editor.camera.x, -this.editor.camera.y);
 
         this.renderGrid(ctx);
-        this.renderTerrainTriangles(ctx);
-        this.renderBuildingPolygons(ctx);
-        this.renderWallUnitQuads(ctx);
-        this.renderObstacleOutlines(ctx);
-        this.renderBoundaryOutlines(ctx);
+        this.renderBoundaries(ctx);
+        this.renderBuildings(ctx);
+        this.renderWalls(ctx);
+        this.renderObstacles(ctx);
         this.renderOffMeshLinks(ctx);
+        this.renderSeedPoints(ctx);
         this.renderSelection(ctx);
         this.renderCurrentPolygon(ctx);
         this.renderToolPreview(ctx);
@@ -74,205 +74,41 @@ export class EditorRenderer {
     }
 
     // ========================================
-    // Terrain triangles
+    // Boundaries (terreno)
     // ========================================
-    renderTerrainTriangles(ctx) {
-        const navmesh = this.editor.navmeshData;
-        if (!navmesh) return;
-
-        const { vertices, polygons } = navmesh;
+    renderBoundaries(ctx) {
         const invZoom = 1 / this.editor.camera.zoom;
+        const colors = ['#4ade80', '#60a5fa', '#facc15', '#c084fc', '#fb923c'];
 
-        // Build edge map for internal/external edge detection
-        const edgeMap = new Map();
-        const terrainPolygons = polygons.filter(p => p.type === 'terrain');
+        for (let bi = 0; bi < this.editor.editorData.boundaries.length; bi++) {
+            const boundary = this.editor.editorData.boundaries[bi];
+            const verts = boundary.vertices;
+            if (verts.length < 3) continue;
 
-        for (let t = 0; t < terrainPolygons.length; t++) {
-            const indices = terrainPolygons[t].indices;
-            for (let e = 0; e < indices.length; e++) {
-                const a = indices[e];
-                const b = indices[(e + 1) % indices.length];
-                const key = Math.min(a, b) + ',' + Math.max(a, b);
-                edgeMap.set(key, (edgeMap.get(key) || 0) + 1);
-            }
-        }
-
-        // Fill triangles
-        let terrainIdx = 0;
-        for (const poly of polygons) {
-            if (poly.type !== 'terrain') continue;
-
-            const indices = poly.indices;
             ctx.beginPath();
-            const v0 = vertices[indices[0]];
-            ctx.moveTo(v0[0], v0[1]);
-            for (let i = 1; i < indices.length; i++) {
-                const v = vertices[indices[i]];
-                ctx.lineTo(v[0], v[1]);
+            ctx.moveTo(verts[0][0], verts[0][1]);
+            for (let i = 1; i < verts.length; i++) {
+                ctx.lineTo(verts[i][0], verts[i][1]);
             }
             ctx.closePath();
 
-            // Highlight for merge tool
-            const isMergeSelected = this.editor.mergeSelection &&
-                (this.editor.mergeSelection.includes(polygons.indexOf(poly)));
-            const isMergeHover = this.editor.mergeHover === polygons.indexOf(poly);
-
-            if (isMergeSelected) {
-                ctx.fillStyle = 'rgba(250, 204, 21, 0.4)';
-            } else if (isMergeHover) {
-                ctx.fillStyle = 'rgba(74, 222, 128, 0.4)';
-            } else {
-                ctx.fillStyle = `hsla(${200 + (terrainIdx * 17) % 60}, 50%, 30%, 0.4)`;
-            }
+            ctx.fillStyle = 'hsla(210, 50%, 30%, 0.3)';
             ctx.fill();
-            terrainIdx++;
-        }
-
-        // Draw edges
-        for (const poly of polygons) {
-            if (poly.type !== 'terrain') continue;
-            const indices = poly.indices;
-
-            for (let e = 0; e < indices.length; e++) {
-                const a = indices[e];
-                const b = indices[(e + 1) % indices.length];
-                const key = Math.min(a, b) + ',' + Math.max(a, b);
-                const shared = edgeMap.get(key) > 1;
-
-                ctx.beginPath();
-                ctx.moveTo(vertices[a][0], vertices[a][1]);
-                ctx.lineTo(vertices[b][0], vertices[b][1]);
-
-                if (shared) {
-                    ctx.strokeStyle = 'rgba(100, 180, 255, 0.5)';
-                    ctx.lineWidth = invZoom;
-                } else {
-                    ctx.strokeStyle = 'rgba(233, 69, 96, 0.7)';
-                    ctx.lineWidth = invZoom * 1.5;
-                }
-                ctx.stroke();
-            }
-        }
-
-        // Split preview: midpoint on hovered edge
-        if (this.editor.splitPreview) {
-            const sp = this.editor.splitPreview;
-            ctx.beginPath();
-            ctx.arc(sp.x, sp.y, invZoom * 5, 0, Math.PI * 2);
-            ctx.fillStyle = '#00ffff';
-            ctx.fill();
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = invZoom;
+            ctx.strokeStyle = colors[bi % colors.length];
+            ctx.lineWidth = invZoom * 2;
             ctx.stroke();
         }
     }
 
     // ========================================
-    // Building polygons
+    // Buildings
     // ========================================
-    renderBuildingPolygons(ctx) {
-        const navmesh = this.editor.navmeshData;
+    renderBuildings(ctx) {
         const invZoom = 1 / this.editor.camera.zoom;
 
-        if (navmesh) {
-            const { vertices, polygons } = navmesh;
-
-            for (const poly of polygons) {
-                if (poly.type !== 'building') continue;
-
-                const indices = poly.indices;
-                ctx.beginPath();
-                const v0 = vertices[indices[0]];
-                ctx.moveTo(v0[0], v0[1]);
-                for (let i = 1; i < indices.length; i++) {
-                    const v = vertices[indices[i]];
-                    ctx.lineTo(v[0], v[1]);
-                }
-                ctx.closePath();
-
-                const isSelected = this.editor.selectedObject &&
-                    this.editor.selectedObject.type === 'building' &&
-                    this.editor.selectedObject.id === poly.sourceId;
-
-                ctx.fillStyle = isSelected ? 'rgba(192, 132, 252, 0.4)' : 'rgba(168, 85, 247, 0.3)';
-                ctx.fill();
-
-                ctx.strokeStyle = isSelected ? '#e9d5ff' : '#a855f7';
-                ctx.lineWidth = invZoom * (isSelected ? 2.5 : 1.5);
-                ctx.stroke();
-            }
-        } else {
-            // Render buildings directly from editorData when no navmesh built yet
-            this.editor.editorData.buildings.forEach(bldg => {
-                this._renderBuildingDirect(ctx, bldg);
-            });
-        }
-    }
-
-    _renderBuildingDirect(ctx, bldg) {
-        const invZoom = 1 / this.editor.camera.zoom;
-        const verts = bldg.vertices;
-        if (verts.length < 3) return;
-
-        ctx.beginPath();
-        ctx.moveTo(verts[0].x, verts[0].y);
-        for (let i = 1; i < verts.length; i++) {
-            ctx.lineTo(verts[i].x, verts[i].y);
-        }
-        ctx.closePath();
-
-        const isSelected = this.editor.selectedObject === bldg;
-        ctx.fillStyle = isSelected ? 'rgba(192, 132, 252, 0.4)' : 'rgba(168, 85, 247, 0.3)';
-        ctx.fill();
-        ctx.strokeStyle = isSelected ? '#e9d5ff' : '#a855f7';
-        ctx.lineWidth = invZoom * (isSelected ? 2.5 : 1.5);
-        ctx.stroke();
-    }
-
-    // ========================================
-    // Wall unit quads
-    // ========================================
-    renderWallUnitQuads(ctx) {
-        const navmesh = this.editor.navmeshData;
-        const invZoom = 1 / this.editor.camera.zoom;
-
-        if (navmesh) {
-            const { vertices, polygons } = navmesh;
-
-            for (const poly of polygons) {
-                if (poly.type !== 'wall_unit') continue;
-
-                const indices = poly.indices;
-                ctx.beginPath();
-                const v0 = vertices[indices[0]];
-                ctx.moveTo(v0[0], v0[1]);
-                for (let i = 1; i < indices.length; i++) {
-                    const v = vertices[indices[i]];
-                    ctx.lineTo(v[0], v[1]);
-                }
-                ctx.closePath();
-
-                ctx.fillStyle = 'rgba(251, 146, 60, 0.3)';
-                ctx.fill();
-                ctx.strokeStyle = '#fb923c';
-                ctx.lineWidth = invZoom * 1.5;
-                ctx.stroke();
-            }
-        } else {
-            // Render walls directly from editorData when no navmesh built yet
-            this.editor.editorData.walls.forEach(wall => {
-                this._renderWallDirect(ctx, wall);
-            });
-        }
-    }
-
-    _renderWallDirect(ctx, wall) {
-        const invZoom = 1 / this.editor.camera.zoom;
-        const isSelected = this.editor.selectedObject === wall;
-
-        for (const unit of wall.units) {
-            const verts = unit.vertices;
-            if (verts.length < 3) continue;
+        this.editor.editorData.buildings.forEach(bldg => {
+            const verts = bldg.vertices;
+            if (verts.length < 3) return;
 
             ctx.beginPath();
             ctx.moveTo(verts[0].x, verts[0].y);
@@ -281,18 +117,45 @@ export class EditorRenderer {
             }
             ctx.closePath();
 
+            const isSelected = this.editor.selectedObject === bldg;
+            ctx.fillStyle = isSelected ? 'rgba(192, 132, 252, 0.4)' : 'rgba(168, 85, 247, 0.3)';
+            ctx.fill();
+            ctx.strokeStyle = isSelected ? '#e9d5ff' : '#a855f7';
+            ctx.lineWidth = invZoom * (isSelected ? 2.5 : 1.5);
+            ctx.stroke();
+        });
+    }
+
+    // ========================================
+    // Walls (outline intero, non unit)
+    // ========================================
+    renderWalls(ctx) {
+        const invZoom = 1 / this.editor.camera.zoom;
+
+        this.editor.editorData.walls.forEach(wall => {
+            const outline = wall.getOutline();
+            if (outline.length < 3) return;
+
+            ctx.beginPath();
+            ctx.moveTo(outline[0].x, outline[0].y);
+            for (let i = 1; i < outline.length; i++) {
+                ctx.lineTo(outline[i].x, outline[i].y);
+            }
+            ctx.closePath();
+
+            const isSelected = this.editor.selectedObject === wall;
             ctx.fillStyle = isSelected ? 'rgba(251, 146, 60, 0.4)' : 'rgba(251, 146, 60, 0.3)';
             ctx.fill();
             ctx.strokeStyle = isSelected ? '#fcd34d' : '#fb923c';
             ctx.lineWidth = invZoom * (isSelected ? 2 : 1.5);
             ctx.stroke();
-        }
+        });
     }
 
     // ========================================
-    // Obstacle outlines
+    // Obstacles
     // ========================================
-    renderObstacleOutlines(ctx) {
+    renderObstacles(ctx) {
         const invZoom = 1 / this.editor.camera.zoom;
 
         this.editor.editorData.obstacles.forEach(obs => {
@@ -313,31 +176,6 @@ export class EditorRenderer {
             ctx.lineWidth = invZoom * (isSelected ? 2.5 : 1.5);
             ctx.stroke();
         });
-    }
-
-    // ========================================
-    // Boundary outlines
-    // ========================================
-    renderBoundaryOutlines(ctx) {
-        const invZoom = 1 / this.editor.camera.zoom;
-        const colors = ['#4ade80', '#60a5fa', '#facc15', '#c084fc', '#fb923c'];
-
-        for (let bi = 0; bi < this.editor.editorData.boundaries.length; bi++) {
-            const boundary = this.editor.editorData.boundaries[bi];
-            const verts = boundary.vertices;
-            if (verts.length < 2) continue;
-
-            ctx.beginPath();
-            ctx.moveTo(verts[0][0], verts[0][1]);
-            for (let i = 1; i < verts.length; i++) {
-                ctx.lineTo(verts[i][0], verts[i][1]);
-            }
-            ctx.closePath();
-
-            ctx.strokeStyle = colors[bi % colors.length];
-            ctx.lineWidth = invZoom * 2;
-            ctx.stroke();
-        }
     }
 
     // ========================================
@@ -422,18 +260,17 @@ export class EditorRenderer {
             ctx.stroke();
             ctx.setLineDash([]);
         } else if (sel.type === 'wall') {
-            for (const unit of sel.units) {
-                const verts = unit.vertices;
-                ctx.beginPath();
-                ctx.moveTo(verts[0].x, verts[0].y);
-                for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
-                ctx.closePath();
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = invZoom * 2;
-                ctx.setLineDash([invZoom * 3, invZoom * 2]);
-                ctx.stroke();
-                ctx.setLineDash([]);
-            }
+            const outline = sel.getOutline();
+            if (outline.length < 3) return;
+            ctx.beginPath();
+            ctx.moveTo(outline[0].x, outline[0].y);
+            for (let i = 1; i < outline.length; i++) ctx.lineTo(outline[i].x, outline[i].y);
+            ctx.closePath();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = invZoom * 2;
+            ctx.setLineDash([invZoom * 3, invZoom * 2]);
+            ctx.stroke();
+            ctx.setLineDash([]);
         } else if (sel.type === 'obstacle') {
             const verts = sel.vertices;
             if (verts.length < 3) return;
@@ -559,6 +396,39 @@ export class EditorRenderer {
                 ctx.fillStyle = color;
                 ctx.fill();
             }
+        }
+    }
+
+    // ========================================
+    // Seed Points
+    // ========================================
+    renderSeedPoints(ctx) {
+        const seeds = this.editor.editorData.seedPoints;
+        if (seeds.length === 0) return;
+
+        const invZoom = 1 / this.editor.camera.zoom;
+        const r = invZoom * 6;
+
+        for (const p of seeds) {
+            // Diamond shape
+            ctx.beginPath();
+            ctx.moveTo(p[0], p[1] - r);
+            ctx.lineTo(p[0] + r, p[1]);
+            ctx.lineTo(p[0], p[1] + r);
+            ctx.lineTo(p[0] - r, p[1]);
+            ctx.closePath();
+
+            ctx.fillStyle = 'rgba(34, 211, 238, 0.6)';
+            ctx.fill();
+            ctx.strokeStyle = '#22d3ee';
+            ctx.lineWidth = invZoom * 1.5;
+            ctx.stroke();
+
+            // Center dot
+            ctx.beginPath();
+            ctx.arc(p[0], p[1], invZoom * 2, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
         }
     }
 

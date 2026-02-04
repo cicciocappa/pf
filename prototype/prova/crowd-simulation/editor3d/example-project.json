@@ -1,0 +1,137 @@
+{
+  "editorData": {
+    "terrain": {
+      "bounds": {
+        "minX": -25,
+        "maxX": 25,
+        "minY": -25,
+        "maxY": 25
+      }
+    },
+    "buildings": [
+      {
+        "id": "bldg_1",
+        "type": "building",
+        "position": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "rotation": 0,
+        "scaleX": 6,
+        "scaleY": 6,
+        "height": 4,
+        "baseShape": "ngon",
+        "sides": 4,
+        "vertices": [
+          { "x": -3, "y": -3 },
+          { "x": 3, "y": -3 },
+          { "x": 3, "y": 3 },
+          { "x": -3, "y": 3 }
+        ]
+      },
+      {
+        "id": "bldg_2",
+        "type": "building",
+        "position": {
+          "x": 10,
+          "y": 0,
+          "z": 0
+        },
+        "rotation": 0.785,
+        "scaleX": 4,
+        "scaleY": 4,
+        "height": 5,
+        "baseShape": "ngon",
+        "sides": 6,
+        "vertices": [
+          { "x": 8, "y": -2 },
+          { "x": 10, "y": -2 },
+          { "x": 12, "y": 0 },
+          { "x": 10, "y": 2 },
+          { "x": 8, "y": 2 },
+          { "x": 6, "y": 0 }
+        ]
+      },
+      {
+        "id": "bldg_3",
+        "type": "building",
+        "position": {
+          "x": -10,
+          "y": 0,
+          "z": 0
+        },
+        "rotation": 0,
+        "scaleX": 5,
+        "scaleY": 3,
+        "height": 3.5,
+        "baseShape": "ngon",
+        "sides": 4,
+        "vertices": [
+          { "x": -12.5, "y": -1.5 },
+          { "x": -7.5, "y": -1.5 },
+          { "x": -7.5, "y": 1.5 },
+          { "x": -12.5, "y": 1.5 }
+        ]
+      }
+    ],
+    "walls": [
+      {
+        "id": "wall_1",
+        "type": "wall",
+        "points": [
+          { "x": -20, "y": -20, "z": 0 },
+          { "x": 20, "y": -20, "z": 0 },
+          { "x": 20, "y": 20, "z": 0 },
+          { "x": -20, "y": 20, "z": 0 },
+          { "x": -20, "y": -20, "z": 0 }
+        ],
+        "thickness": 0.5,
+        "height": 3
+      },
+      {
+        "id": "wall_2",
+        "type": "wall",
+        "points": [
+          { "x": -5, "y": 10, "z": 0 },
+          { "x": 5, "y": 10, "z": 0 }
+        ],
+        "thickness": 0.3,
+        "height": 2.5
+      }
+    ],
+    "obstacles": [
+      {
+        "id": "obs_1",
+        "type": "obstacle",
+        "obstacleType": "prism",
+        "vertices": [
+          { "x": 15, "y": -10 },
+          { "x": 18, "y": -10 },
+          { "x": 18, "y": -7 },
+          { "x": 15, "y": -7 }
+        ],
+        "depth": 1,
+        "height": 1.5
+      },
+      {
+        "id": "obs_2",
+        "type": "obstacle",
+        "obstacleType": "hole",
+        "vertices": [
+          { "x": -15, "y": 10 },
+          { "x": -12, "y": 10 },
+          { "x": -12, "y": 13 },
+          { "x": -15, "y": 13 }
+        ],
+        "depth": 2,
+        "height": 1
+      }
+    ],
+    "_idCounter": 10
+  },
+  "camera": {
+    "position": [35, 25, 35],
+    "target": [0, 0, 0]
+  }
+}

@@ -3,15 +3,13 @@
 // Tool switching, undo, save/load, export
 // ========================================
 
-import Delaunator from 'delaunator';
-import Constrainautor from 'constrainautor';
 import { EditorData, Boundary } from './editor-models.js';
 import { GeometryFactory } from './editor-geometry.js';
-import { buildNavMesh, exportNavMesh, exportMesh3D } from './editor-cdt.js';
+import { exportMesh3D } from './editor-cdt.js';
 import { EditorRenderer } from './editor-renderer.js';
 import {
     SelectTool, BoundaryTool, BuildingTool, WallTool,
-    ObstacleTool, OffMeshTool, MergeTool, SplitTool
+    ObstacleTool, OffMeshTool, SeedPointTool
 } from './editor-tools.js';
 
 class NavMeshEditor {
@@ -21,7 +19,6 @@ class NavMeshEditor {
 
         // Data
         this.editorData = new EditorData();
-        this.navmeshData = null;
 
         // Tools
         this.tools = {};
@@ -35,11 +32,6 @@ class NavMeshEditor {
         this.selectedObject = null;
         this.selectedLink = -1;
         this.selectedVertex = null;
-
-        // Merge/Split state
-        this.mergeSelection = [];
-        this.mergeHover = -1;
-        this.splitPreview = null;
 
         // Snap
         this.snapEnabled = true;
@@ -79,8 +71,7 @@ class NavMeshEditor {
             wall: new WallTool(this),
             obstacle: new ObstacleTool(this),
             offmesh: new OffMeshTool(this),
-            merge: new MergeTool(this),
-            split: new SplitTool(this)
+            seed: new SeedPointTool(this)
         };
     }
 
@@ -166,14 +157,6 @@ class NavMeshEditor {
         this.selectedObject = null;
         this.selectedLink = -1;
         this.selectedVertex = null;
-        this.retriangulate();
-    }
-
-    // ========================================
-    // CDT
-    // ========================================
-    retriangulate() {
-        this.navmeshData = buildNavMesh(this.editorData, Delaunator, Constrainautor);
         this.updateInfoBar();
     }
 
@@ -204,6 +187,7 @@ class NavMeshEditor {
 
         // Actions
         document.getElementById('exportJSON')?.addEventListener('click', () => this.exportJSON());
+        document.getElementById('openPreview')?.addEventListener('click', () => this.openPreview());
         document.getElementById('openSimulator')?.addEventListener('click', () => this.openInSimulator());
         document.getElementById('saveProject')?.addEventListener('click', () => this.saveProject());
         document.getElementById('loadProject')?.addEventListener('click', () => {
@@ -228,7 +212,6 @@ class NavMeshEditor {
         document.getElementById('clearAll')?.addEventListener('click', () => {
             this.saveUndo();
             this.editorData.clear();
-            this.navmeshData = null;
             this.selectedObject = null;
             this.selectedLink = -1;
             this.selectedVertex = null;
@@ -300,12 +283,8 @@ class NavMeshEditor {
         if (e.key === 'w' || e.key === 'W') { this.setTool('wall'); return; }
         if (e.key === 'o' || e.key === 'O') { this.setTool('obstacle'); return; }
         if (e.key === 'l' || e.key === 'L') { this.setTool('offmesh'); return; }
+        if (e.key === 'p' || e.key === 'P') { this.setTool('seed'); return; }
         if (e.key === 's' && !e.ctrlKey) { this.setTool('select'); return; }
-        if (e.key === 'm' || e.key === 'M') { this.setTool('merge'); return; }
-        if (e.key === 'x' || e.key === 'X') {
-            // Only if not in building tool where x means scale constraint
-            if (this.currentTool !== 'building') { this.setTool('split'); return; }
-        }
         if (e.key === 'g' || e.key === 'G') {
             this.snapEnabled = !this.snapEnabled;
             document.getElementById('toggleSnap').textContent = `Snap: ${this.snapEnabled ? 'ON' : 'OFF'}`;
@@ -415,7 +394,7 @@ class NavMeshEditor {
     // Export
     // ========================================
     buildExportJSON() {
-        return exportMesh3D(this.editorData, Delaunator, Constrainautor);
+        return exportMesh3D(this.editorData);
     }
 
     exportJSON() {
@@ -455,6 +434,17 @@ class NavMeshEditor {
         localStorage.setItem('editorMesh3D', JSON.stringify(json));
         window.open('index.html?fromEditor=1', '_blank');
         this.setStatus('Mesh 3D inviata al simulatore');
+    }
+
+    openPreview() {
+        const json = this.buildExportJSON();
+        if (!json) {
+            this.setStatus('Nessun dato da esportare. Disegna almeno un boundary.');
+            return;
+        }
+        localStorage.setItem('editorMesh3D', JSON.stringify(json));
+        window.open('preview.html', '_blank');
+        this.setStatus('Mesh 3D inviata al preview');
     }
 
     // ========================================
@@ -519,8 +509,6 @@ class NavMeshEditor {
         this.selectedLink = -1;
         this.selectedVertex = null;
 
-        this.retriangulate();
-
         const nBd = this.editorData.boundaries.length;
         const nBldg = this.editorData.buildings.size;
         const nWall = this.editorData.walls.size;
@@ -537,15 +525,7 @@ class NavMeshEditor {
         const nWall = this.editorData.walls.size;
         const nObs = this.editorData.obstacles.size;
         const nLinks = this.editorData.offMeshLinks.length;
-
-        let tCount = 0, bCount = 0, wCount = 0;
-        if (this.navmeshData) {
-            for (const p of this.navmeshData.polygons) {
-                if (p.type === 'terrain') tCount++;
-                else if (p.type === 'building') bCount++;
-                else if (p.type === 'wall_unit') wCount++;
-            }
-        }
+        const nSeeds = this.editorData.seedPoints.length;
 
         const setText = (id, val) => {
             const el = document.getElementById(id);
@@ -556,8 +536,8 @@ class NavMeshEditor {
         setText('buildingCount', nBldg);
         setText('wallCount', nWall);
         setText('obstacleCount', nObs);
-        setText('triCount', tCount);
         setText('linkCount', nLinks);
+        setText('seedCount', nSeeds);
     }
 
     updateStatus() {

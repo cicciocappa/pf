@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mesh Preview</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #111; overflow: hidden; font-family: sans-serif; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: #ccc;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.6;
+            pointer-events: none;
+        }
+        #info b { color: #e94560; }
+        #error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #e94560;
+            font-size: 18px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info"></div>
+    <div id="error">No mesh data found in localStorage.</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://esm.sh/three@0.170.0",
+            "three/addons/": "https://esm.sh/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        const raw = localStorage.getItem('editorMesh3D');
+        if (!raw) {
+            document.getElementById('error').style.display = 'block';
+            throw new Error('No editorMesh3D in localStorage');
+        }
+
+        const data = JSON.parse(raw);
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(innerWidth, innerHeight);
+        renderer.setPixelRatio(devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // Lights
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(50, 100, 50);
+        scene.add(dirLight);
+
+        // Helper: build a Three.js mesh from flat positions/indices arrays
+        function buildMesh(positions, indices, color, opacity = 1) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.setIndex(indices);
+            geom.computeVertexNormals();
+
+            const mat = new THREE.MeshPhongMaterial({
+                color,
+                side: THREE.DoubleSide,
+                transparent: opacity < 1,
+                opacity,
+                depthWrite: opacity >= 1,
+            });
+            return new THREE.Mesh(geom, mat);
+        }
+
+        // Helper: wireframe overlay
+        function buildWireframe(positions, indices, color) {
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geom.setIndex(indices);
+            const wire = new THREE.WireframeGeometry(geom);
+            return new THREE.LineSegments(wire, new THREE.LineBasicMaterial({ color, opacity: 0.5, transparent: true }));
+        }
+
+        let totalVerts = 0;
+        let totalTris = 0;
+
+        // Ground
+        if (data.ground && data.ground.positions.length > 0) {
+            const m = buildMesh(data.ground.positions, data.ground.indices, 0x3a7d44, 0.7);
+            scene.add(m);
+            scene.add(buildWireframe(data.ground.positions, data.ground.indices, 0x66ff66));
+            totalVerts += data.ground.positions.length / 3;
+            totalTris += data.ground.indices.length / 3;
+        }
+
+        // Structures (buildings, walls)
+        const structColors = { building: 0xc0392b, wall: 0xe67e22 };
+        if (data.structures) {
+            for (const s of data.structures) {
+                const col = structColors[s.type] || 0x9b59b6;
+                const m = buildMesh(s.positions, s.indices, col, 0.85);
+                scene.add(m);
+                scene.add(buildWireframe(s.positions, s.indices, 0xffffff));
+                totalVerts += s.positions.length / 3;
+                totalTris += s.indices.length / 3;
+            }
+        }
+
+        // Static obstacles
+        if (data.staticObstacles && data.staticObstacles.positions.length > 0) {
+            const m = buildMesh(data.staticObstacles.positions, data.staticObstacles.indices, 0x8e44ad, 0.85);
+            scene.add(m);
+            scene.add(buildWireframe(data.staticObstacles.positions, data.staticObstacles.indices, 0xffffff));
+            totalVerts += data.staticObstacles.positions.length / 3;
+            totalTris += data.staticObstacles.indices.length / 3;
+        }
+
+        // Off-mesh connections (lines)
+        if (data.offMeshConnections && data.offMeshConnections.length > 0) {
+            const pts = [];
+            for (const link of data.offMeshConnections) {
+                pts.push(link.start[0], link.start[1] + 0.1, link.start[2]);
+                pts.push(link.end[0], link.end[1] + 0.1, link.end[2]);
+            }
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+            scene.add(new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 })));
+        }
+
+        // Grid helper
+        const gridSize = Math.max(
+            data.ground ? Math.max(...data.ground.positions.filter((_, i) => i % 3 !== 1).map(Math.abs)) : 50,
+            50
+        );
+        const grid = new THREE.GridHelper(gridSize * 2, 40, 0x333355, 0x222244);
+        grid.position.y = -0.01;
+        scene.add(grid);
+
+        // Axes
+        scene.add(new THREE.AxesHelper(10));
+
+        // Camera positioning: fit to ground bounds
+        if (data.ground && data.ground.positions.length >= 12) {
+            const p = data.ground.positions;
+            const cx = (p[0] + p[3]) / 2;
+            const cz = (p[2] + p[8]) / 2;
+            const dx = Math.abs(p[3] - p[0]);
+            const dz = Math.abs(p[8] - p[2]);
+            const dist = Math.max(dx, dz) * 1.2;
+            camera.position.set(cx + dist * 0.5, dist * 0.7, cz + dist * 0.5);
+            controls.target.set(cx, 0, cz);
+        } else {
+            camera.position.set(30, 40, 30);
+            controls.target.set(0, 0, 0);
+        }
+        controls.update();
+
+        // Info panel
+        const structCount = data.structures ? data.structures.length : 0;
+        const linkCount = data.offMeshConnections ? data.offMeshConnections.length : 0;
+        document.getElementById('info').innerHTML =
+            `<b>Mesh Preview</b><br>` +
+            `Vertices: ${totalVerts} | Triangles: ${totalTris}<br>` +
+            `Structures: ${structCount} | Off-mesh links: ${linkCount}<br>` +
+            `<span style="color:#3a7d44">■</span> Ground ` +
+            `<span style="color:#c0392b">■</span> Building ` +
+            `<span style="color:#e67e22">■</span> Wall ` +
+            `<span style="color:#8e44ad">■</span> Obstacle ` +
+            `<span style="color:#00ffff">—</span> Link`;
+
+        // Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = innerWidth / innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(innerWidth, innerHeight);
+        });
+
+        // Render loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>

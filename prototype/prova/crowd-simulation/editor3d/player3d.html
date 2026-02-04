@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NavMesh 3D Player - Crowd Simulation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .toolbar {
+            background: #16213e;
+            padding: 10px 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            border-bottom: 1px solid #0f3460;
+            flex-wrap: wrap;
+        }
+        .toolbar button {
+            background: #0f3460;
+            color: #eee;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toolbar button:hover {
+            background: #e94560;
+        }
+        .toolbar button.active {
+            background: #e94560;
+        }
+        .toolbar label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+        .toolbar input[type="file"] {
+            display: none;
+        }
+        .toolbar input[type="number"] {
+            width: 60px;
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #0f3460;
+            border-radius: 3px;
+            padding: 4px 6px;
+            font-size: 12px;
+        }
+        .info {
+            margin-left: auto;
+            font-size: 12px;
+            color: #888;
+        }
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .status {
+            background: #16213e;
+            padding: 8px 20px;
+            font-size: 12px;
+            border-top: 1px solid #0f3460;
+        }
+        .help {
+            position: absolute;
+            bottom: 50px;
+            right: 20px;
+            background: rgba(22, 33, 62, 0.92);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 11px;
+            line-height: 1.6;
+            max-width: 300px;
+            pointer-events: none;
+        }
+        .help h4 {
+            margin-bottom: 8px;
+            color: #e94560;
+        }
+        .help kbd {
+            background: #0f3460;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 9px;
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <label>
+            <button id="loadBtn">Load NavMesh</button>
+            <input type="file" id="fileInput" accept=".json">
+        </label>
+        <button id="spawnAgent">Spawn Agent</button>
+        <button id="clearAgents">Clear Agents</button>
+        <button id="toggleNavMesh">Show NavMesh</button>
+        <button id="toggleGeometry">Show Geometry</button>
+
+        <label>
+            Agents: <input type="number" id="agentCountInput" value="1" min="1" max="100" step="1">
+        </label>
+
+        <div class="info">
+            Agents: <span id="agentCount">0</span> |
+            FPS: <span id="fps">0</span>
+        </div>
+    </div>
+    <div class="canvas-container">
+        <canvas id="canvas"></canvas>
+        <div class="help">
+            <h4>Controls</h4>
+            <div><kbd>Left Click</kbd> Spawn agent at position</div>
+            <div><kbd>Right Click</kbd> Move selected agents to target</div>
+            <div><kbd>Shift+Drag</kbd> Orbit camera</div>
+            <div><kbd>Middle Mouse</kbd> Pan camera</div>
+            <div><kbd>Scroll</kbd> Zoom in/out</div>
+            <div><kbd>1</kbd> Top view | <kbd>2</kbd> Perspective view</div>
+        </div>
+    </div>
+    <div class="status" id="status">Click "Test Level" in editor or load a NavMesh</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://esm.sh/three@0.170.0",
+            "three/addons/": "https://esm.sh/three@0.170.0/examples/jsm/",
+            "mathcat": "../navcat/node_modules/mathcat/dist/index.js",
+            "navcat": "../navcat/dist/index.js",
+            "navcat/blocks": "../navcat/dist/blocks.js",
+            "navcat/three": "../navcat/dist/three.js"
+        }
+    }
+    </script>
+    <script type="module" src="player3d.js"></script>
+</body>
+</html>

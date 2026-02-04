@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NavMesh Editor</title>
+    <title>NavMesh 3D Editor</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -13,6 +13,7 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         /* === TOOLBAR === */
@@ -55,6 +56,21 @@
             white-space: nowrap;
         }
         .toolbar input[type="file"] { display: none; }
+        .toolbar input[type="number"] {
+            width: 60px;
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #0f3460;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font-size: 12px;
+        }
+        .toolbar label {
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
 
         /* === MAIN LAYOUT === */
         .main-area {
@@ -63,39 +79,6 @@
             overflow: hidden;
         }
 
-        /* === TEMPLATE PANEL (left) === */
-        .template-panel {
-            width: 160px;
-            background: #16213e;
-            border-right: 1px solid #0f3460;
-            overflow-y: auto;
-            display: none;
-            padding: 8px;
-        }
-        .template-panel h4 {
-            color: #a855f7;
-            font-size: 11px;
-            margin-bottom: 8px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .tmpl-btn {
-            display: block;
-            width: 100%;
-            background: #0f3460;
-            color: #ccc;
-            border: none;
-            padding: 5px 8px;
-            margin-bottom: 3px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 11px;
-            text-align: left;
-            transition: background 0.15s;
-        }
-        .tmpl-btn:hover { background: #a855f7; color: #fff; }
-        .tmpl-btn.active { background: #a855f7; color: #fff; }
-
         /* === CANVAS === */
         .canvas-container {
             flex: 1;
@@ -103,14 +86,14 @@
             overflow: hidden;
         }
         canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
+            display: block;
+            width: 100%;
+            height: 100%;
         }
 
         /* === PROPERTIES PANEL (right) === */
         .properties-panel {
-            width: 200px;
+            width: 220px;
             background: #16213e;
             border-left: 1px solid #0f3460;
             padding: 10px;
@@ -133,6 +116,15 @@
         .prop-label { color: #888; }
         .prop-value { color: #ddd; font-weight: 500; }
         .prop-hint { color: #555; font-size: 11px; font-style: italic; }
+        .prop-input {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #0f3460;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font-size: 11px;
+            width: 60px;
+        }
 
         /* === STATUS BAR === */
         .status {
@@ -153,7 +145,7 @@
             border-radius: 6px;
             font-size: 10px;
             line-height: 1.6;
-            max-width: 280px;
+            max-width: 300px;
             pointer-events: none;
         }
         .help h4 { margin-bottom: 6px; color: #e94560; font-size: 11px; }
@@ -168,24 +160,24 @@
 <body>
     <!-- TOOLBAR -->
     <div class="toolbar">
-        <button data-tool="boundary" title="Boundary (B)">Boundary (B)</button>
-        <button data-tool="building" title="Building (F)">Building (F)</button>
+        <button data-tool="building" title="Building (B)">Building (B)</button>
         <button data-tool="wall" title="Wall (W)">Wall (W)</button>
         <button data-tool="obstacle" title="Obstacle (O)">Obstacle (O)</button>
-        <button data-tool="offmesh" title="OffMesh (L)">OffMesh (L)</button>
-        <button data-tool="seed" title="Seed Point (P)">Seed (P)</button>
         <button data-tool="select" title="Select (S)">Select (S)</button>
-        <div class="separator"></div>
-
-        <button id="toggleSnap" title="Toggle vertex snap (G)">Snap: ON</button>
-        <button id="toggleEdgeSnap" title="Toggle edge snap">Edge Snap: ON</button>
-        <button id="toggleGridSnap" title="Toggle grid snap">Grid: OFF</button>
 
         <div class="separator"></div>
 
-        <button id="exportJSON">Export JSON</button>
-        <button id="openPreview">Preview 3D</button>
-        <button id="openSimulator">Open Simulator</button>
+        <label>Height: <input type="number" id="heightInput" value="3" min="0.1" max="20" step="0.1"> m</label>
+        <label>Thickness: <input type="number" id="thicknessInput" value="0.5" min="0.1" max="5" step="0.1"> m</label>
+
+        <div class="separator"></div>
+
+        <button id="exportNavcat">Export Navcat</button>
+        <button id="exportGLTF">Export GLTF</button>
+
+        <div class="separator"></div>
+
+        <button id="testLevel">Test Level</button>
 
         <div class="separator"></div>
 
@@ -197,36 +189,27 @@
         <button id="clearAll" title="Clear all">Reset</button>
 
         <div class="info">
-            Bd:<span id="boundaryCount">0</span>
             Bldg:<span id="buildingCount">0</span>
-            W:<span id="wallCount">0</span>
+            Wall:<span id="wallCount">0</span>
             Obs:<span id="obstacleCount">0</span>
-            Links:<span id="linkCount">0</span>
-            Seeds:<span id="seedCount">0</span>
         </div>
     </div>
 
     <!-- MAIN AREA -->
     <div class="main-area">
-        <!-- Template Panel (left, visible only with Building tool) -->
-        <div class="template-panel" id="templatePanel">
-            <h4>Templates</h4>
-            <div id="templateList"></div>
-        </div>
-
         <!-- Canvas -->
         <div class="canvas-container">
             <canvas id="canvas"></canvas>
 
             <div class="help">
                 <h4>Controls</h4>
-                <div><kbd>B</kbd> Boundary <kbd>F</kbd> Building <kbd>W</kbd> Wall <kbd>O</kbd> Obstacle</div>
-                <div><kbd>L</kbd> OffMesh <kbd>P</kbd> Seed <kbd>S</kbd> Select</div>
-                <div><kbd>G</kbd> Toggle snap | <kbd>Esc</kbd> Cancel | <kbd>Ctrl+Z</kbd> Undo</div>
-                <div><b>Building:</b> Wheel=scale, Shift+Wheel=rotate, X/Y=constrain, 3-9=ngon</div>
-                <div><b>Wall:</b> Wheel=thickness, Ctrl+Wheel=segment, Enter/RClick=complete</div>
-                <div><b>Obstacle:</b> Shift+drag=rectangle</div>
-                <div><b>Navigation:</b> Middle-click=pan, Wheel=zoom</div>
+                <div><kbd>B</kbd> Building <kbd>W</kbd> Wall <kbd>O</kbd> Obstacle <kbd>S</kbd> Select</div>
+                <div><kbd>Tab</kbd> Toggle obstacle type (hole/prism)</div>
+                <div><kbd>Esc</kbd> Cancel | <kbd>Del</kbd> Delete selected</div>
+                <div><kbd>Mouse Wheel</kbd> Adjust height/zoom</div>
+                <div><kbd>Shift+Drag</kbd> Orbit camera</div>
+                <div><kbd>Middle Click</kbd> Pan camera</div>
+                <div><kbd>3-9</kbd> Change building sides</div>
             </div>
         </div>
 
@@ -240,16 +223,16 @@
     </div>
 
     <!-- STATUS BAR -->
-    <div class="status" id="status">Press B to draw a boundary, then F for buildings, W for walls</div>
+    <div class="status" id="status">Press B to create buildings, W for walls, O for obstacles</div>
 
     <script type="importmap">
     {
         "imports": {
-            "delaunator": "https://esm.sh/delaunator",
-            "constrainautor": "https://esm.sh/@kninnug/constrainautor"
+            "three": "https://esm.sh/three@0.170.0",
+            "three/addons/": "https://esm.sh/three@0.170.0/examples/jsm/"
         }
     }
     </script>
-    <script type="module" src="editor.js"></script>
+    <script type="module" src="editor3d.js"></script>
 </body>
 </html>

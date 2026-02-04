@@ -52,12 +52,13 @@ import {
     polyMeshDetailToTileDetailMesh,
     buildTile,
     addTile,
+    removeTile,
     createNavMesh,
     WALKABLE_AREA,
     ContourBuildFlags,
 } from './navcat/dist/index.js';
 
-import { crowd } from './navcat/dist/blocks.js';
+import { crowd, floodFillNavMesh } from './navcat/dist/blocks.js';
 
 import { vec3, box3, vec2 } from 'mathcat';
 
@@ -86,6 +87,7 @@ class CrowdSimulationApp {
         this.renderVertices = [];
         this.renderPolygons = [];
         this.jsonOffMeshConnections = [];
+        this.jsonSeedPoints = [];
 
         // --- Dati mesh strutturati ---
         this.structuredMeshData = null;
@@ -93,6 +95,8 @@ class CrowdSimulationApp {
 
         // --- Query Filter per agenti piccoli (passano ovunque) ---
         this.smallQueryFilter = {
+            includeFlags: DEFAULT_QUERY_FILTER.includeFlags,
+            excludeFlags: DEFAULT_QUERY_FILTER.excludeFlags,
             getCost: DEFAULT_QUERY_FILTER.getCost,
             passFilter: DEFAULT_QUERY_FILTER.passFilter
         };
@@ -121,6 +125,16 @@ class CrowdSimulationApp {
         this.isSelecting = false;
         this.dragStart = { x: 0, y: 0 };
         this.selectionRect = null;
+
+        // --- Web Worker per navmesh ---
+        this.navMeshWorker = new Worker('navmesh-worker-bundle.js');
+        this._navMeshGeneration = 0;
+        this._rebuildPending = false;
+        this.navMeshWorker.onmessage = (e) => this._onWorkerResult(e);
+        this.navMeshWorker.onerror = (e) => {
+            console.error('NavMesh worker error:', e.message);
+            this._rebuildPending = false;
+        };
 
         // --- Performance tracking ---
         this.lastTime = performance.now();
@@ -209,7 +223,12 @@ class CrowdSimulationApp {
     // Generazione NavMesh con pipeline personalizzata (multi-agent)
     // ========================================================================
 
-    _generateNavMeshMultiAgent(positions, indices) {
+    /**
+     * Genera un tile dalla mesh data (positions/indices) senza creare un nuovo navmesh.
+     * Esegue tutta la pipeline: markWalkableTriangles → rasterize → filter → compact →
+     * erode → regions → contours → polyMesh → buildTile.
+     */
+    _buildTileFromMesh(positions, indices) {
         const ctx = BuildContext.create();
         BuildContext.start(ctx, 'navmesh generation');
 
@@ -275,10 +294,8 @@ class CrowdSimulationApp {
 
         BuildContext.end(ctx, 'navmesh generation');
 
-        const nav = createNavMesh();
-        nav.tileWidth = polyMesh.bounds[1][0] - polyMesh.bounds[0][0];
-        nav.tileHeight = polyMesh.bounds[1][2] - polyMesh.bounds[0][2];
-        vec3.copy(nav.origin, polyMesh.bounds[0]);
+        const cs_ = cs;
+        const ch_ = ch;
 
         const tilePolys = polyMeshToTilePolys(polyMesh);
         const tileDetailMesh = polyMeshDetailToTileDetailMesh(tilePolys.polys, polyMeshDetail);
@@ -293,14 +310,25 @@ class CrowdSimulationApp {
             tileX: 0,
             tileY: 0,
             tileLayer: 0,
-            cellSize: cs,
-            cellHeight: ch,
+            cellSize: cs_,
+            cellHeight: ch_,
             walkableHeight: 2.0,
             walkableRadius: SMALL_RADIUS,
             walkableClimb: 0.5,
         };
 
         const tile = buildTile(tileParams);
+        return { tile, polyMesh };
+    }
+
+    _generateNavMeshMultiAgent(positions, indices) {
+        const { tile, polyMesh } = this._buildTileFromMesh(positions, indices);
+
+        const nav = createNavMesh();
+        nav.tileWidth = polyMesh.bounds[1][0] - polyMesh.bounds[0][0];
+        nav.tileHeight = polyMesh.bounds[1][2] - polyMesh.bounds[0][2];
+        vec3.copy(nav.origin, polyMesh.bounds[0]);
+
         addTile(nav, tile);
 
         return nav;
@@ -355,7 +383,9 @@ class CrowdSimulationApp {
     }
 
     /**
-     * Ricostruisce navmesh da mesh combinata, ricrea crowd.
+     * Ricostruisce la navmesh in modo asincrono, sostituendo il tile esistente
+     * senza ricreare il crowd. Gli agenti sopravvivono e i loro path vengono
+     * rivalidati automaticamente da checkPathValidity() in crowd.update().
      */
     rebuildNavMesh() {
         const combined = this._combineMeshData();
@@ -364,30 +394,55 @@ class CrowdSimulationApp {
             return;
         }
 
-        console.log('Rebuilding navmesh...');
+        this._navMeshGeneration++;
+        const generationId = this._navMeshGeneration;
+        this._rebuildPending = true;
 
-        let navMesh;
-        try {
-            navMesh = this._generateNavMeshMultiAgent(combined.positions, combined.indices);
-        } catch (e) {
-            console.error('NavMesh rebuild failed:', e);
+        console.log(`Rebuilding navmesh in worker (gen ${generationId})...`);
+        this.setStatus('Ricalcolo navmesh in corso...');
+
+        this.navMeshWorker.postMessage({
+            positions: combined.positions,
+            indices: combined.indices,
+            generationId
+        });
+    }
+
+    /**
+     * Callback quando il worker completa il calcolo del tile.
+     */
+    _onWorkerResult(e) {
+        const { tile, error, generationId } = e.data;
+
+        // Ignora risultati di generazioni precedenti (stale)
+        if (generationId !== this._navMeshGeneration) {
+            console.log(`Ignoring stale navmesh result (gen ${generationId}, current ${this._navMeshGeneration})`);
+            return;
+        }
+
+        this._rebuildPending = false;
+
+        if (error) {
+            console.error('NavMesh worker error:', error);
             this.setStatus('Errore nella rigenerazione della navmesh');
             return;
         }
 
-        this.navMesh = navMesh;
+        // Rimuovi il tile esistente e aggiungi quello nuovo
+        removeTile(this.navMesh, 0, 0, 0);
+        addTile(this.navMesh, tile);
 
         // Assegna flags univoci ai poligoni
         for (const tileId of Object.keys(this.navMesh.tiles)) {
-            const tile = this.navMesh.tiles[tileId];
-            for (let i = 0; i < tile.polys.length; i++) {
-                tile.polys[i].flags = i + 1;
-                const nodeIdx = tile.polyNodes[i];
+            const t = this.navMesh.tiles[tileId];
+            for (let i = 0; i < t.polys.length; i++) {
+                t.polys[i].flags = i + 1;
+                const nodeIdx = t.polyNodes[i];
                 this.navMesh.nodes[nodeIdx].flags = i + 1;
             }
         }
 
-        // Aggiungi connessioni off-mesh
+        // Ri-aggiungi connessioni off-mesh
         for (const conn of this.jsonOffMeshConnections) {
             addOffMeshConnection(this.navMesh, {
                 start: conn.start,
@@ -401,13 +456,55 @@ class CrowdSimulationApp {
             });
         }
 
-        // Ricrea crowd (gli agenti vengono persi)
-        this.crowdSim = crowd.create(LARGE_RADIUS);
-        this.selectedAgents.clear();
+        // Flood fill pruning
+        this._floodFillPrune();
+
+        // NON ricreare il crowd - gli agenti sopravvivono
 
         this._extractRenderData();
         const narrowCount = this._countNarrowPolys();
-        this.setStatus(`NavMesh rigenerata: ${this.renderPolygons.length} poligoni (${narrowCount} narrow)`);
+        const agentCount = this.crowdSim ? Object.keys(this.crowdSim.agents).length : 0;
+        this.setStatus(`NavMesh rigenerata: ${this.renderPolygons.length} poligoni (${narrowCount} narrow), ${agentCount} agenti preservati`);
+    }
+
+    /**
+     * Flood fill pruning: disabilita i poligoni non raggiungibili dai seed points.
+     */
+    _floodFillPrune() {
+        if (!this.jsonSeedPoints || this.jsonSeedPoints.length === 0) return;
+
+        const halfExtents = [1, 1, 1];
+        const startRefs = [];
+
+        for (const sp of this.jsonSeedPoints) {
+            const result = findNearestPoly(
+                createFindNearestPolyResult(),
+                this.navMesh,
+                sp,
+                halfExtents,
+                DEFAULT_QUERY_FILTER
+            );
+            if (result.nodeRef !== 0) {
+                startRefs.push(result.nodeRef);
+            }
+        }
+
+        if (startRefs.length === 0) {
+            console.warn('Flood fill: no seed points matched a navmesh polygon');
+            return;
+        }
+
+        const { unreachable } = floodFillNavMesh(this.navMesh, startRefs);
+
+        for (const nodeRef of unreachable) {
+            const node = getNodeByRef(this.navMesh, nodeRef);
+            node.flags = 0;
+
+            const tile = this.navMesh.tiles[node.tileId];
+            tile.polys[node.polyIndex].flags = 0;
+        }
+
+        console.log(`Flood fill: ${startRefs.length} seeds, ${unreachable.length} unreachable polys disabled`);
     }
 
     /**
@@ -435,6 +532,7 @@ class CrowdSimulationApp {
             this.structuredMeshData = json;
             this.disabledStructures.clear();
             this.jsonOffMeshConnections = json.offMeshConnections || [];
+            this.jsonSeedPoints = json.seedPoints || [];
 
             const combined = this._combineMeshData();
             if (!combined || combined.positions.length < 9 || combined.indices.length < 3) {
@@ -481,6 +579,9 @@ class CrowdSimulationApp {
                 const connected = isOffMeshConnectionConnected(this.navMesh, connId);
                 console.log(`OffMesh connection ${connId}: connected=${connected}`, conn);
             }
+
+            // Flood fill pruning
+            this._floodFillPrune();
 
             this.crowdSim = crowd.create(LARGE_RADIUS);
             this.selectedAgents.clear();
@@ -570,7 +671,8 @@ class CrowdSimulationApp {
                 this.renderPolygons.push({
                     vertices: poly.vertices.slice(),
                     neis: poly.neis ? poly.neis.slice() : [],
-                    area: poly.area
+                    area: poly.area,
+                    flags: poly.flags
                 });
             }
         }
@@ -979,6 +1081,7 @@ class CrowdSimulationApp {
 
         for (let i = 0; i < this.renderPolygons.length; i++) {
             const poly = this.renderPolygons[i];
+            if (poly.flags === 0) continue; // pruned by flood fill
             const isNarrow = poly.area === AREA_WALKABLE_NARROW;
 
             ctx.beginPath();

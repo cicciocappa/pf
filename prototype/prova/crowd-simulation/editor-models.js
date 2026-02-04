@@ -125,10 +125,9 @@ export class Wall {
     }
 
     containsPoint(x, y) {
-        for (const unit of this.units) {
-            if (pointInPolygon(x, y, unit.vertices)) return true;
-        }
-        return false;
+        const outline = this.getOutline();
+        if (outline.length < 3) return false;
+        return pointInPolygon(x, y, outline);
     }
 
     generateDestructibleUnits() {
@@ -679,6 +678,7 @@ export class EditorData {
         this.walls = new Map();
         this.obstacles = new Map();
         this.offMeshLinks = [];
+        this.seedPoints = [];
         this.connections = [];
         this.connectionManager = new ConnectionManager(this);
 
@@ -929,6 +929,7 @@ export class EditorData {
             walls: [...this.walls.values()].map(w => w.toJSON()),
             obstacles: [...this.obstacles.values()].map(o => o.toJSON()),
             offMeshLinks: this.offMeshLinks.map(l => ({ ...l })),
+            seedPoints: this.seedPoints.map(p => [...p]),
             connections: JSON.parse(JSON.stringify(this.connections)),
             _idCounter: this._idCounter
         };
@@ -967,6 +968,7 @@ export class EditorData {
         }
 
         this.offMeshLinks = data.offMeshLinks || [];
+        this.seedPoints = data.seedPoints || [];
         this.connections = data.connections || [];
 
         this.updateAllGeometry();
@@ -978,6 +980,7 @@ export class EditorData {
         this.walls.clear();
         this.obstacles.clear();
         this.offMeshLinks = [];
+        this.seedPoints = [];
         this.connections = [];
         this._snapCacheDirty = true;
     }

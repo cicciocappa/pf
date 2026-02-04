@@ -874,85 +874,66 @@ export function exportNavMesh(navmeshData, offMeshLinks) {
  * }
  * Ogni chunk ha indicizzazione locale (partono da 0).
  */
-export function exportMesh3D(editorData, Delaunator, Constrainautor) {
+export function exportMesh3D(editorData) {
     if (editorData.boundaries.length === 0) return null;
 
     const OBSTACLE_HEIGHT = 3.0;
 
-    // --- 1. Ground: triangola ogni boundary a Y=0 ---
-    const groundPositions = [];
-    const groundIndices = [];
-
+    // --- 1. Ground: quad dal bounding box di tutti i boundary ---
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
     for (const boundary of editorData.boundaries) {
-        const verts = boundary.vertices; // [[x,y], ...]
-        const n = verts.length;
-        if (n < 3) continue;
-
-        const baseIdx = groundPositions.length / 3;
-
-        const flatPts = new Float64Array(n * 2);
-        for (let i = 0; i < n; i++) {
-            flatPts[i * 2] = verts[i][0];
-            flatPts[i * 2 + 1] = verts[i][1];
-        }
-
-        let del, con;
-        try {
-            del = new Delaunator(flatPts);
-            con = new Constrainautor(del);
-            for (let i = 0; i < n; i++) {
-                con.constrainOne(i, (i + 1) % n);
-            }
-        } catch (e) {
-            console.warn('Ground triangulation failed for boundary', boundary.id, e);
-            continue;
-        }
-
-        for (let i = 0; i < n; i++) {
-            groundPositions.push(verts[i][0], 0, verts[i][1]);
-        }
-
-        const numTri = del.triangles.length / 3;
-        for (let t = 0; t < numTri; t++) {
-            const i0 = del.triangles[t * 3];
-            const i1 = del.triangles[t * 3 + 1];
-            const i2 = del.triangles[t * 3 + 2];
-
-            const cx = (verts[i0][0] + verts[i1][0] + verts[i2][0]) / 3;
-            const cy = (verts[i0][1] + verts[i1][1] + verts[i2][1]) / 3;
-
-            if (pointInPolygonArray(cx, cy, verts)) {
-                groundIndices.push(baseIdx + i0, baseIdx + i1, baseIdx + i2);
-            }
+        for (const v of boundary.vertices) {
+            minX = Math.min(minX, v[0]);
+            maxX = Math.max(maxX, v[0]);
+            minY = Math.min(minY, v[1]);
+            maxY = Math.max(maxY, v[1]);
         }
     }
 
-    // --- 2. Structures: buildings e walls con array locali separati ---
+    const groundPositions = [
+        minX, 0, minY,
+        maxX, 0, minY,
+        maxX, 0, maxY,
+        minX, 0, maxY,
+    ];
+    const groundIndices = [0, 2, 1, 0, 3, 2];
+
+    // --- 2. Structures: buildings e walls come prismi separati ---
     const structures = [];
 
     editorData.buildings.forEach(bldg => {
         const pos = [];
         const idx = [];
-        _extrudePolygonXY(pos, idx, bldg.vertices, OBSTACLE_HEIGHT);
+        _buildPrism(pos, idx, bldg.vertices, OBSTACLE_HEIGHT);
         structures.push({
             id: bldg.id,
             type: 'building',
-            label: '',
+            label: bldg.label || '',
             positions: pos,
             indices: idx
         });
     });
 
     editorData.walls.forEach(wall => {
-        const outline = wall.getOutline();
-        if (outline.length >= 3) {
+        const tp = wall.calculateThicknessPoints();
+        if (tp.length >= 2) {
+            // Apply connection cap overrides
+            if (wall.startCapOverride) {
+                tp[0].left = { ...wall.startCapOverride.left };
+                tp[0].right = { ...wall.startCapOverride.right };
+            }
+            if (wall.endCapOverride) {
+                tp[tp.length - 1].left = { ...wall.endCapOverride.left };
+                tp[tp.length - 1].right = { ...wall.endCapOverride.right };
+            }
             const pos = [];
             const idx = [];
-            _extrudePolygonXY(pos, idx, outline, OBSTACLE_HEIGHT);
+            _buildWallPrism(pos, idx, tp, OBSTACLE_HEIGHT);
             structures.push({
                 id: wall.id,
                 type: 'wall',
-                label: '',
+                label: wall.label || '',
                 positions: pos,
                 indices: idx
             });
@@ -964,7 +945,9 @@ export function exportMesh3D(editorData, Delaunator, Constrainautor) {
     const obsIndices = [];
 
     editorData.obstacles.forEach(obs => {
-        _extrudePolygonXY(obsPositions, obsIndices, obs.vertices, OBSTACLE_HEIGHT);
+        if (obs.vertices.length >= 3) {
+            _buildPrism(obsPositions, obsIndices, obs.vertices, OBSTACLE_HEIGHT);
+        }
     });
 
     // --- 4. Off-mesh connections ---
@@ -975,19 +958,23 @@ export function exportMesh3D(editorData, Delaunator, Constrainautor) {
         bidirectional: link.bidirectional !== false
     }));
 
+    // --- 5. Seed points per flood fill ---
+    const seedPoints3D = (editorData.seedPoints || []).map(p => [p[0], 0, p[1]]);
+
     return {
         ground: { positions: groundPositions, indices: groundIndices },
         structures,
         staticObstacles: { positions: obsPositions, indices: obsIndices },
-        offMeshConnections: outLinks
+        offMeshConnections: outLinks,
+        seedPoints: seedPoints3D
     };
 }
 
 /**
- * Estrude un poligono 2D (con vertici {x,y}) in un prisma 3D.
- * Crea base a Y=0, tetto a Y=height, e pareti laterali.
+ * Crea un prisma 3D da un poligono 2D (vertici {x,y}).
+ * Pareti verticali (da Y=0 a Y=height) + copertura a Y=height.
  */
-function _extrudePolygonXY(positions, indices, vertices, height) {
+function _buildPrism(positions, indices, vertices, height) {
     const baseIdx = positions.length / 3;
     const n = vertices.length;
 
@@ -1011,13 +998,54 @@ function _extrudePolygonXY(positions, indices, vertices, height) {
         indices.push(b1, t0, t1);
     }
 
-    // Tetto (fan triangulation)
+    // Copertura (fan triangulation dal primo vertice top)
     for (let i = 1; i < n - 1; i++) {
         indices.push(baseIdx + n, baseIdx + n + i, baseIdx + n + i + 1);
     }
+}
 
-    // Base (winding inverso)
-    for (let i = 1; i < n - 1; i++) {
-        indices.push(baseIdx, baseIdx + i + 1, baseIdx + i);
+/**
+ * Crea un prisma 3D per un muro a partire dai thicknessPoints.
+ * Ogni segmento (tra punto i e i+1) genera un quadrilatero di base,
+ * pareti laterali e un quadrilatero di copertura a Y=height.
+ */
+function _buildWallPrism(positions, indices, thicknessPoints, height) {
+    const n = thicknessPoints.length;
+
+    for (let i = 0; i < n - 1; i++) {
+        const baseIdx = positions.length / 3;
+        const L0 = thicknessPoints[i].left;
+        const L1 = thicknessPoints[i + 1].left;
+        const R0 = thicknessPoints[i].right;
+        const R1 = thicknessPoints[i + 1].right;
+
+        // 8 vertici per segmento: 4 bottom (Y=0), 4 top (Y=height)
+        // Bottom: 0=L0, 1=L1, 2=R1, 3=R0
+        positions.push(L0.x, 0, L0.y);
+        positions.push(L1.x, 0, L1.y);
+        positions.push(R1.x, 0, R1.y);
+        positions.push(R0.x, 0, R0.y);
+        // Top: 4=L0, 5=L1, 6=R1, 7=R0
+        positions.push(L0.x, height, L0.y);
+        positions.push(L1.x, height, L1.y);
+        positions.push(R1.x, height, R1.y);
+        positions.push(R0.x, height, R0.y);
+
+        const b = baseIdx;
+        // Left wall (L0-L1)
+        indices.push(b+0, b+4, b+1);
+        indices.push(b+1, b+4, b+5);
+        // Front wall (L1-R1)
+        indices.push(b+1, b+5, b+2);
+        indices.push(b+2, b+5, b+6);
+        // Right wall (R1-R0)
+        indices.push(b+2, b+6, b+3);
+        indices.push(b+3, b+6, b+7);
+        // Back wall (R0-L0)
+        indices.push(b+3, b+7, b+0);
+        indices.push(b+0, b+7, b+4);
+        // Roof cap (quad at Y=height)
+        indices.push(b+4, b+5, b+6);
+        indices.push(b+4, b+6, b+7);
     }
 }

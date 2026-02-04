@@ -5,7 +5,6 @@
 
 import { GeometryFactory, polygonAreaArray } from './editor-geometry.js';
 import { Building, Wall, Obstacle, Boundary } from './editor-models.js';
-import { mergeTriangles, splitEdge } from './editor-cdt.js';
 
 // ========================================
 // Base Tool
@@ -90,14 +89,14 @@ export class SelectTool extends Tool {
         if (this.dragTarget) {
             this.dragTarget.translate(dx, dy);
             this.editor.editorData._snapCacheDirty = true;
-            this.editor.retriangulate();
+    
         } else if (this.editor.selectedVertex) {
             const sv = this.editor.selectedVertex;
             if (sv.type === 'boundary') {
                 const bd = this.editor.editorData.boundaries[sv.boundaryIdx];
                 bd.vertices[sv.vertexIdx] = [x, y];
                 this.editor.editorData._snapCacheDirty = true;
-                this.editor.retriangulate();
+        
             }
         }
 
@@ -128,7 +127,7 @@ export class SelectTool extends Tool {
                 this.editor.editorData.removeObstacle(sel.id);
             }
             this.editor.selectObject(null);
-            this.editor.retriangulate();
+    
         } else if (this.editor.selectedLink >= 0) {
             this.editor.saveUndo();
             this.editor.editorData.offMeshLinks.splice(this.editor.selectedLink, 1);
@@ -141,7 +140,7 @@ export class SelectTool extends Tool {
                     this.editor.saveUndo();
                     bd.vertices.splice(sv.vertexIdx, 1);
                     this.editor.selectedVertex = null;
-                    this.editor.retriangulate();
+            
                 }
             }
         }
@@ -253,7 +252,7 @@ export class BoundaryTool extends Tool {
 
         this.editor.editorData.addBoundary(boundary);
         this.currentPolygon = [];
-        this.editor.retriangulate();
+
     }
 
     getStatusText() {
@@ -329,7 +328,7 @@ export class BuildingTool extends Tool {
 
         this.edgeSnapInfo = null;
         this.editor.edgeSnapInfo = null;
-        this.editor.retriangulate();
+
     }
 
     onMouseMove(x, y, event) {
@@ -599,7 +598,7 @@ export class WallTool extends Tool {
         this.editor.editorData.updateAllGeometry();
         this.editor.selectObject(wall);
         this._reset();
-        this.editor.retriangulate();
+
     }
 
     _getSnappedPoint(x, y) {
@@ -766,7 +765,7 @@ export class ObstacleTool extends Tool {
                     ]
                 });
                 this.editor.editorData.addObstacle(obs);
-                this.editor.retriangulate();
+        
             }
 
             this.isDrawingRect = false;
@@ -806,7 +805,7 @@ export class ObstacleTool extends Tool {
 
         this.editor.editorData.addObstacle(obs);
         this.currentPolygon = [];
-        this.editor.retriangulate();
+
     }
 
     drawPreview(ctx) {
@@ -886,186 +885,46 @@ export class OffMeshTool extends Tool {
 }
 
 // ========================================
-// MergeTool (M)
+// Seed Point Tool
 // ========================================
-export class MergeTool extends Tool {
+export class SeedPointTool extends Tool {
     constructor(editor) {
         super(editor);
-        this.name = 'merge';
-        this.firstSelection = -1;
-    }
-
-    activate() {
-        this.firstSelection = -1;
-        this.editor.mergeSelection = [];
-        this.editor.mergeHover = -1;
-    }
-
-    deactivate() {
-        this.firstSelection = -1;
-        this.editor.mergeSelection = [];
-        this.editor.mergeHover = -1;
+        this.name = 'seed';
     }
 
     onMouseDown(x, y, event) {
         if (event.button !== 0) return;
 
-        const navmesh = this.editor.navmeshData;
-        if (!navmesh) return;
-
-        const polyIdx = this._findTerrainPolygonAt(x, y);
-        if (polyIdx < 0) return;
-
-        if (this.firstSelection < 0) {
-            this.firstSelection = polyIdx;
-            this.editor.mergeSelection = [polyIdx];
-        } else {
-            // Try to merge
-            const success = mergeTriangles(navmesh, this.firstSelection, polyIdx);
-            if (success) {
-                this.editor.setStatus('Merge successful');
-            } else {
-                this.editor.setStatus('Merge failed: polygons not adjacent or result not convex');
+        // Shift+click: remove nearest seed point
+        if (event.shiftKey) {
+            const seeds = this.editor.editorData.seedPoints;
+            if (seeds.length === 0) return;
+            let minDist = Infinity, minIdx = -1;
+            for (let i = 0; i < seeds.length; i++) {
+                const dx = seeds[i][0] - x;
+                const dy = seeds[i][1] - y;
+                const d = dx * dx + dy * dy;
+                if (d < minDist) { minDist = d; minIdx = i; }
             }
-            this.firstSelection = -1;
-            this.editor.mergeSelection = [];
-        }
-    }
-
-    onMouseMove(x, y, event) {
-        const navmesh = this.editor.navmeshData;
-        if (!navmesh) return;
-
-        this.editor.mergeHover = this._findTerrainPolygonAt(x, y);
-    }
-
-    onKeyDown(event) {
-        if (event.key === 'Escape') {
-            this.firstSelection = -1;
-            this.editor.mergeSelection = [];
-            event.preventDefault();
-        }
-    }
-
-    _findTerrainPolygonAt(x, y) {
-        const navmesh = this.editor.navmeshData;
-        if (!navmesh) return -1;
-
-        for (let i = 0; i < navmesh.polygons.length; i++) {
-            const poly = navmesh.polygons[i];
-            if (poly.type !== 'terrain') continue;
-
-            const pts = poly.indices.map(idx => navmesh.vertices[idx]);
-            if (this._pointInPoly(x, y, pts)) return i;
-        }
-        return -1;
-    }
-
-    _pointInPoly(x, y, pts) {
-        let inside = false;
-        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-            const xi = pts[i][0], yi = pts[i][1];
-            const xj = pts[j][0], yj = pts[j][1];
-            if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-                inside = !inside;
+            const threshold = 10 / this.editor.camera.zoom;
+            if (Math.sqrt(minDist) < threshold) {
+                this.editor.saveUndo();
+                seeds.splice(minIdx, 1);
+                this.editor.updateInfoBar();
             }
+            return;
         }
-        return inside;
+
+        this.editor.saveUndo();
+        this.editor.editorData.seedPoints.push([x, y]);
+        this.editor.updateInfoBar();
     }
 
     getStatusText() {
-        if (this.firstSelection < 0) return 'Merge: click first terrain polygon';
-        return 'Merge: click second adjacent terrain polygon';
+        return 'Seed: click to place, Shift+click to remove';
     }
 
     getCursor() { return 'crosshair'; }
 }
 
-// ========================================
-// SplitTool (X)
-// ========================================
-export class SplitTool extends Tool {
-    constructor(editor) {
-        super(editor);
-        this.name = 'split';
-        this.hoveredEdge = null;
-    }
-
-    activate() {
-        this.hoveredEdge = null;
-        this.editor.splitPreview = null;
-    }
-
-    deactivate() {
-        this.hoveredEdge = null;
-        this.editor.splitPreview = null;
-    }
-
-    onMouseMove(x, y, event) {
-        const navmesh = this.editor.navmeshData;
-        if (!navmesh) return;
-
-        this.hoveredEdge = null;
-        this.editor.splitPreview = null;
-
-        let bestDist = 0.5; // threshold in world units
-
-        for (let i = 0; i < navmesh.polygons.length; i++) {
-            const poly = navmesh.polygons[i];
-            if (poly.type !== 'terrain') continue;
-
-            const indices = poly.indices;
-            for (let e = 0; e < indices.length; e++) {
-                const a = indices[e];
-                const b = indices[(e + 1) % indices.length];
-                const va = navmesh.vertices[a];
-                const vb = navmesh.vertices[b];
-
-                const dx = vb[0] - va[0], dy = vb[1] - va[1];
-                const len2 = dx * dx + dy * dy;
-                if (len2 === 0) continue;
-
-                let t = ((x - va[0]) * dx + (y - va[1]) * dy) / len2;
-                t = Math.max(0, Math.min(1, t));
-                const px = va[0] + t * dx;
-                const py = va[1] + t * dy;
-                const dist = Math.hypot(x - px, y - py);
-
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    const midX = (va[0] + vb[0]) / 2;
-                    const midY = (va[1] + vb[1]) / 2;
-                    this.hoveredEdge = { polyIdx: i, edgeVA: a, edgeVB: b };
-                    this.editor.splitPreview = { x: midX, y: midY };
-                }
-            }
-        }
-    }
-
-    onMouseDown(x, y, event) {
-        if (event.button !== 0) return;
-        if (!this.hoveredEdge) return;
-
-        const navmesh = this.editor.navmeshData;
-        if (!navmesh) return;
-
-        const { polyIdx, edgeVA, edgeVB } = this.hoveredEdge;
-        const success = splitEdge(navmesh, polyIdx, edgeVA, edgeVB);
-
-        if (success) {
-            this.editor.setStatus('Edge split successful');
-        } else {
-            this.editor.setStatus('Edge split failed');
-        }
-
-        this.hoveredEdge = null;
-        this.editor.splitPreview = null;
-    }
-
-    getStatusText() {
-        if (this.hoveredEdge) return 'Split: click to split this edge';
-        return 'Split: hover over a terrain edge to preview';
-    }
-
-    getCursor() { return 'crosshair'; }
-}
