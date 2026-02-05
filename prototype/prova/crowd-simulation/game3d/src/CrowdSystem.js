@@ -162,4 +162,44 @@ export class CrowdSystem {
         if (entity.crowdAgentId == null) return null;
         return this.crowd.agents[entity.crowdAgentId];
     }
+
+    /**
+     * Aggiorna la navmesh utilizzata dal crowd system.
+     * Riposiziona tutti gli agenti sulla nuova navmesh.
+     */
+    updateNavMesh(newNavMesh) {
+        this.navMesh = newNavMesh;
+
+        // Riposiziona tutti gli agenti sulla nuova navmesh
+        for (const [agentId, entity] of this._agentEntityMap) {
+            const position = [entity.x, 0, entity.z];
+            const isLarge = entity.radius >= LARGE_RADIUS;
+            const queryFilter = isLarge ? this.largeQueryFilter : this.smallQueryFilter;
+
+            const nearest = createFindNearestPolyResult();
+            findNearestPoly(
+                nearest,
+                this.navMesh,
+                position,
+                [5, 5, 5],
+                queryFilter
+            );
+
+            if (nearest.success) {
+                // Aggiorna la posizione dell'agente sulla nuova navmesh
+                const agent = this.crowd.agents[agentId];
+                if (agent) {
+                    agent.position[0] = nearest.position[0];
+                    agent.position[1] = nearest.position[1];
+                    agent.position[2] = nearest.position[2];
+                    agent.corridor.nodeRefs = [nearest.nodeRef];
+                    agent.corridor.positions = [[...nearest.position]];
+                }
+            } else {
+                console.warn(`Agent ${agentId} non trovato sulla nuova navmesh`);
+            }
+        }
+
+        console.log(`CrowdSystem: navmesh aggiornata, ${this._agentEntityMap.size} agenti riposizionati`);
+    }
 }

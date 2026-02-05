@@ -406,6 +406,14 @@ export class SceneManager {
         return [r, g, b];
     }
 
+    /**
+     * Ricostruisce la geometria della navmesh (alias per buildNavMeshGeometry)
+     * Usato quando la navmesh viene rigenerata dinamicamente
+     */
+    rebuildNavMeshGeometry(renderVertices, renderPolygons) {
+        this.buildNavMeshGeometry(renderVertices, renderPolygons);
+    }
+
     // ========================================
     // Raycasting
     // ========================================

@@ -272,11 +272,8 @@ export class BuildingTool extends Tool {
         this.name = 'building';
         this.position = { x: 0, y: 0 };
         this.rotation = 0;
-        this.scaleX = 5;
-        this.scaleY = 5;
-        this.sides = 4;
-        this.currentTemplateId = 'ngon';
-        this.scaleConstraint = null;
+        this.scale = 5;  // Scala uniforme
+        this.currentBuildingType = 'GUARD_TOWER';
         this.edgeSnapInfo = null;
         this.alignedEdgeIndex = 0;
     }
@@ -287,22 +284,18 @@ export class BuildingTool extends Tool {
 
     _resetTransform() {
         this.rotation = 0;
-        this.scaleX = 5;
-        this.scaleY = 5;
-        this.scaleConstraint = null;
+        this.scale = 5;
         this.edgeSnapInfo = null;
         this.alignedEdgeIndex = 0;
     }
 
-    setTemplate(templateId) {
-        this.currentTemplateId = templateId;
-        if (templateId === 'ngon') {
-            // keep sides
-        } else {
-            // Determine sides from template for edge snap
-            const verts = GeometryFactory.getTemplate(templateId);
-            this.sides = verts.length;
-        }
+    setBuildingType(buildingType) {
+        this.currentBuildingType = buildingType;
+    }
+
+    // Retrocompatibilità con vecchio nome
+    setTemplate(buildingType) {
+        this.setBuildingType(buildingType);
     }
 
     onMouseDown(x, y, event) {
@@ -310,17 +303,12 @@ export class BuildingTool extends Tool {
 
         this.editor.saveUndo();
 
-        const templateId = this.currentTemplateId === 'ngon'
-            ? `ngon_${this.sides}`
-            : this.currentTemplateId;
-
         const building = new Building({
             id: this.editor.editorData.generateId('bldg'),
-            templateId: templateId,
+            buildingType: this.currentBuildingType,
             position: { ...this.position },
             rotation: this.rotation,
-            scaleX: this.scaleX,
-            scaleY: this.scaleY
+            scale: this.scale
         });
 
         this.editor.editorData.addBuilding(building);
@@ -328,7 +316,6 @@ export class BuildingTool extends Tool {
 
         this.edgeSnapInfo = null;
         this.editor.edgeSnapInfo = null;
-
     }
 
     onMouseMove(x, y, event) {
@@ -358,22 +345,17 @@ export class BuildingTool extends Tool {
                 });
                 const edgeAngle = Math.atan2(edgeDir.y, edgeDir.x);
 
-                const baseOffset = (this.sides === 4) ? Math.PI / 4 : 0;
-                const baseEdgeMidAngle = -Math.PI / 2 + baseOffset + Math.PI / this.sides;
-                const selectedEdgeOffset = (this.alignedEdgeIndex * 2 * Math.PI) / this.sides;
+                // Calcola allineamento edge per il template corrente
+                const verts = GeometryFactory.getTemplate(this.currentBuildingType);
+                const sides = verts.length;
+                const baseOffset = (sides === 4) ? Math.PI / 4 : 0;
+                const baseEdgeMidAngle = -Math.PI / 2 + baseOffset + Math.PI / sides;
+                const selectedEdgeOffset = (this.alignedEdgeIndex * 2 * Math.PI) / sides;
                 const edgeMidAngle = baseEdgeMidAngle + selectedEdgeOffset;
 
                 this.rotation = edgeAngle - edgeMidAngle - Math.PI / 2;
 
-                let distToCenter;
-                if (this.sides === 4) {
-                    distToCenter = (this.alignedEdgeIndex % 2 === 0) ?
-                        this.scaleY * Math.cos(Math.PI / this.sides) :
-                        this.scaleX * Math.cos(Math.PI / this.sides);
-                } else {
-                    distToCenter = ((this.scaleX + this.scaleY) / 2) * Math.cos(Math.PI / this.sides);
-                }
-
+                const distToCenter = this.scale * Math.cos(Math.PI / sides);
                 const perpDir = { x: -edgeDir.y, y: edgeDir.x };
                 this.position = {
                     x: edgeResult.point.x + perpDir.x * distToCenter,
@@ -400,18 +382,14 @@ export class BuildingTool extends Tool {
         const scaleFactor = deltaY > 0 ? 0.9 : 1.1;
 
         if (event.shiftKey) {
+            // Rotazione grossolana (15 gradi)
             this.rotation += (deltaY > 0 ? -15 : 15) * Math.PI / 180;
         } else if (event.ctrlKey) {
+            // Rotazione fine (1 grado)
             this.rotation += (deltaY > 0 ? -1 : 1) * Math.PI / 180;
         } else {
-            if (this.scaleConstraint === 'x') {
-                this.scaleX = Math.max(1, this.scaleX * scaleFactor);
-            } else if (this.scaleConstraint === 'y') {
-                this.scaleY = Math.max(1, this.scaleY * scaleFactor);
-            } else {
-                this.scaleX = Math.max(1, this.scaleX * scaleFactor);
-                this.scaleY = Math.max(1, this.scaleY * scaleFactor);
-            }
+            // Scala uniforme
+            this.scale = Math.max(1, this.scale * scaleFactor);
         }
         event.preventDefault();
     }
@@ -419,44 +397,38 @@ export class BuildingTool extends Tool {
     onKeyDown(event) {
         const key = event.key.toLowerCase();
 
-        if (key === 'x') this.scaleConstraint = this.scaleConstraint === 'x' ? null : 'x';
-        if (key === 'y') this.scaleConstraint = this.scaleConstraint === 'y' ? null : 'y';
-
+        // Tab per cambiare edge allineato
         if (event.key === 'Tab') {
-            this.alignedEdgeIndex = (this.alignedEdgeIndex + 1) % this.sides;
+            const verts = GeometryFactory.getTemplate(this.currentBuildingType);
+            this.alignedEdgeIndex = (this.alignedEdgeIndex + 1) % verts.length;
             event.preventDefault();
         }
 
+        // 1-6 per selezionare rapidamente i tipi di edificio
+        const templates = GeometryFactory.getAvailableTemplates();
         const numKey = parseInt(event.key);
-        if (!isNaN(numKey)) {
-            this.currentTemplateId = 'ngon';
-            if (numKey >= 3 && numKey <= 9) this.sides = numKey;
-            else if (numKey === 0) this.sides = 10;
-            else if (numKey === 1) this.sides = 11;
-            else if (numKey === 2) this.sides = 12;
-
-            if (this.alignedEdgeIndex >= this.sides) this.alignedEdgeIndex = 0;
+        if (!isNaN(numKey) && numKey >= 1 && numKey <= templates.length) {
+            this.currentBuildingType = templates[numKey - 1];
+            this.alignedEdgeIndex = 0;
             event.preventDefault();
         }
 
         if (event.key === 'Escape') {
             this._resetTransform();
-            this.sides = 4;
-            this.currentTemplateId = 'ngon';
+            this.currentBuildingType = 'GUARD_TOWER';
         }
     }
 
     drawPreview(ctx) {
-        const localVertices = (this.currentTemplateId === 'ngon')
-            ? GeometryFactory.createNGon(this.sides)
-            : GeometryFactory.getTemplate(this.currentTemplateId);
+        const localVertices = GeometryFactory.getTemplate(this.currentBuildingType);
 
+        // Usa scala uniforme per entrambi gli assi
         this.editor.renderer.drawBuildingPreview(
-            this.position, this.rotation, this.scaleX, this.scaleY, localVertices
+            this.position, this.rotation, this.scale, this.scale, localVertices
         );
 
         this.editor.renderer.drawLocalAxes(
-            this.position, this.rotation, this.scaleX, this.scaleY, this.scaleConstraint
+            this.position, this.rotation, this.scale, this.scale, null
         );
     }
 
@@ -466,8 +438,8 @@ export class BuildingTool extends Tool {
     }
 
     getStatusText() {
-        const tmpl = this.currentTemplateId === 'ngon' ? `${this.sides}-gon` : this.currentTemplateId;
-        return `Building: ${tmpl} | Scale ${this.scaleX.toFixed(1)}x${this.scaleY.toFixed(1)}m | Rot ${Math.round(this.rotation * 180 / Math.PI)}deg | Wheel: scale, Shift+Wheel: rotate`;
+        const info = GeometryFactory.getBuildingInfo(this.currentBuildingType);
+        return `Building: ${info.label} | Scale ${this.scale.toFixed(1)}m | Rot ${Math.round(this.rotation * 180 / Math.PI)}deg | Wheel: scale, Shift+Wheel: rotate | 1-6: change type`;
     }
 
     getCursor() { return 'crosshair'; }

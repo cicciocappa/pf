@@ -5,148 +5,110 @@
 
 export const GeometryFactory = {
 
-    createNGon(sides) {
-        const vertices = [];
-        const s = Math.max(3, Math.min(12, sides));
-        const baseOffset = (s === 4) ? Math.PI / 4 : 0;
-        const angleStep = (2 * Math.PI) / s;
-
-        for (let i = 0; i < s; i++) {
-            const angle = -Math.PI / 2 + baseOffset + (i * angleStep);
-            vertices.push({
-                x: Math.cos(angle),
-                y: Math.sin(angle)
-            });
-        }
-        return vertices;
-    },
-
-    getTemplate(id) {
+    // Footprint dei tipi di edificio per il rendering nell'editor
+    // Questi definiscono la sagoma 2D (pianta) dell'edificio
+    // I modelli 3D effettivi sono caricati da file GLTF nel gioco
+    getTemplate(buildingType) {
         const templates = {
-            // === TORRI ===
-            'TOWER': this.createNGon(12),
-            'MAGIC_TOWER': this.createNGon(8),
-            'BALLISTA_TOWER': [
+            // === TORRI (difensive) ===
+            'GUARD_TOWER': [
+                // Torre quadrata con angoli smussati (ottagonale)
                 { x: -0.8, y: -1 }, { x: 0.8, y: -1 },
                 { x: 1, y: -0.8 }, { x: 1, y: 0.8 },
                 { x: 0.8, y: 1 }, { x: -0.8, y: 1 },
                 { x: -1, y: 0.8 }, { x: -1, y: -0.8 }
             ],
-            'ARCHERY_TOWER': this.createNGon(6),
-            'WATCHTOWER': [
-                { x: -0.5, y: -1 }, { x: 0.5, y: -1 },
-                { x: 0.5, y: 1 }, { x: -0.5, y: 1 }
+            'BALLISTA_TOWER': [
+                // Torre più grande per la ballista
+                { x: -1, y: -1.2 }, { x: 1, y: -1.2 },
+                { x: 1.2, y: -1 }, { x: 1.2, y: 1 },
+                { x: 1, y: 1.2 }, { x: -1, y: 1.2 },
+                { x: -1.2, y: 1 }, { x: -1.2, y: -1 }
             ],
 
             // === EDIFICI MILITARI ===
             'BARRACKS': [
+                // Caserma rettangolare allungata
                 { x: -1.5, y: -0.8 }, { x: 1.5, y: -0.8 },
                 { x: 1.5, y: 0.8 }, { x: -1.5, y: 0.8 }
             ],
-            'ARCHERY_RANGE': [
-                { x: -2, y: -0.5 }, { x: 2, y: -0.5 },
-                { x: 2, y: 0.5 }, { x: -2, y: 0.5 }
-            ],
-            'STABLE': [
-                { x: -1.8, y: -1 }, { x: 1.8, y: -1 },
-                { x: 1.8, y: 1 }, { x: -1.8, y: 1 }
-            ],
-            'ARMORY': [
-                { x: -1.2, y: -0.8 }, { x: 1.2, y: -0.8 },
-                { x: 1.2, y: 0.8 }, { x: -1.2, y: 0.8 }
-            ],
-            'SIEGE_WORKSHOP': [
-                { x: -1.5, y: -1.2 }, { x: 1.5, y: -1.2 },
-                { x: 1.5, y: 1.2 }, { x: -1.5, y: 1.2 }
-            ],
 
-            // === EDIFICI FANTASY ===
-            'DRAGON_PIT': this.createNGon(10),
-            'MAGE_GUILD': this.createNGon(5),
+            // === EDIFICI SPECIALI ===
             'TEMPLE': [
+                // Tempio con forma a pentagono (entrata sul lato corto)
                 { x: 0, y: -1.5 }, { x: 1.2, y: -0.5 },
                 { x: 1.2, y: 1 }, { x: -1.2, y: 1 },
                 { x: -1.2, y: -0.5 }
             ],
-            'ALTAR': this.createNGon(6),
-            'CRYSTAL_SPIRE': this.createNGon(3),
-
-            // === EDIFICI RESIDENZIALI ===
-            'SMALL_HOUSE': this.createNGon(4),
-            'LARGE_HOUSE': [
-                { x: -1.3, y: -1 }, { x: 1.3, y: -1 },
-                { x: 1.3, y: 1 }, { x: -1.3, y: 1 }
-            ],
-            'MANOR': [
-                { x: -1.8, y: -1.2 }, { x: 1.8, y: -1.2 },
-                { x: 1.8, y: 1.2 }, { x: -1.8, y: 1.2 }
-            ],
-            'LONG_HALL': [
-                { x: -2.5, y: -0.6 }, { x: 2.5, y: -0.6 },
-                { x: 2.5, y: 0.6 }, { x: -2.5, y: 0.6 }
+            'TREASURY': [
+                // Tesoro esagonale (ben difendibile)
+                { x: 0, y: -1 },
+                { x: 0.87, y: -0.5 }, { x: 0.87, y: 0.5 },
+                { x: 0, y: 1 },
+                { x: -0.87, y: 0.5 }, { x: -0.87, y: -0.5 }
             ],
 
             // === FORTIFICAZIONI ===
-            'BASTION': [
-                { x: 0, y: -1.2 }, { x: 1, y: 0 },
-                { x: 0.8, y: 1 }, { x: -0.8, y: 1 },
-                { x: -1, y: 0 }
-            ],
             'GATEHOUSE': [
+                // Porta nelle mura - rettangolare
                 { x: -1.5, y: -1 }, { x: 1.5, y: -1 },
                 { x: 1.5, y: 1 }, { x: -1.5, y: 1 }
-            ],
-            'CORNER_TOWER': [
-                { x: -1, y: -1 }, { x: 1, y: -1 },
-                { x: 1, y: 0 }, { x: 0, y: 1 },
-                { x: -1, y: 1 }
-            ],
-
-            // === PRODUZIONE ===
-            'BLACKSMITH': [
-                { x: -1.2, y: -0.9 }, { x: 1.2, y: -0.9 },
-                { x: 1.2, y: 0.9 }, { x: -1.2, y: 0.9 }
-            ],
-            'MILL': this.createNGon(8),
-            'GRANARY': [
-                { x: -1, y: -1.5 }, { x: 1, y: -1.5 },
-                { x: 1, y: 1.5 }, { x: -1, y: 1.5 }
-            ],
-            'LUMBER_MILL': [
-                { x: -2, y: -0.8 }, { x: 2, y: -0.8 },
-                { x: 2, y: 0.8 }, { x: -2, y: 0.8 }
-            ],
-            'MINE_ENTRANCE': [
-                { x: -0.8, y: -0.6 }, { x: 0.8, y: -0.6 },
-                { x: 1, y: 0.6 }, { x: -1, y: 0.6 }
-            ],
-            'TAVERN': [
-                { x: -1.4, y: -1 }, { x: 1.4, y: -1 },
-                { x: 1.4, y: 1 }, { x: -1.4, y: 1 }
-            ],
-
-            // === SPECIALI ===
-            'TREASURY': this.createNGon(6),
-            'OBSERVATORY': this.createNGon(12),
-            'MARKETPLACE': [
-                { x: -2, y: -1.5 }, { x: 2, y: -1.5 },
-                { x: 2, y: 1.5 }, { x: -2, y: 1.5 }
             ]
         };
 
-        return templates[id] || this.createNGon(4);
+        // Fallback: quadrato semplice se tipo sconosciuto
+        return templates[buildingType] || [
+            { x: -1, y: -1 }, { x: 1, y: -1 },
+            { x: 1, y: 1 }, { x: -1, y: 1 }
+        ];
     },
 
     getAvailableTemplates() {
         return [
-            'TOWER', 'MAGIC_TOWER', 'BALLISTA_TOWER', 'ARCHERY_TOWER', 'WATCHTOWER',
-            'BARRACKS', 'ARCHERY_RANGE', 'STABLE', 'ARMORY', 'SIEGE_WORKSHOP',
-            'DRAGON_PIT', 'MAGE_GUILD', 'TEMPLE', 'ALTAR', 'CRYSTAL_SPIRE',
-            'SMALL_HOUSE', 'LARGE_HOUSE', 'MANOR', 'LONG_HALL',
-            'BASTION', 'GATEHOUSE', 'CORNER_TOWER',
-            'BLACKSMITH', 'MILL', 'GRANARY', 'LUMBER_MILL', 'MINE_ENTRANCE', 'TAVERN',
-            'TREASURY', 'OBSERVATORY', 'MARKETPLACE'
+            'GUARD_TOWER',
+            'BALLISTA_TOWER',
+            'BARRACKS',
+            'TEMPLE',
+            'TREASURY',
+            'GATEHOUSE'
         ];
+    },
+
+    // Informazioni aggiuntive per ogni tipo (per UI editor)
+    getBuildingInfo(buildingType) {
+        const info = {
+            'GUARD_TOWER': {
+                label: 'Guard Tower',
+                category: 'Towers',
+                description: 'Basic defensive tower with archers'
+            },
+            'BALLISTA_TOWER': {
+                label: 'Ballista Tower',
+                category: 'Towers',
+                description: 'Heavy siege defense tower'
+            },
+            'BARRACKS': {
+                label: 'Barracks',
+                category: 'Military',
+                description: 'Spawns defender units'
+            },
+            'TEMPLE': {
+                label: 'Temple',
+                category: 'Special',
+                description: 'Sacred building with magical properties'
+            },
+            'TREASURY': {
+                label: 'Treasury',
+                category: 'Special',
+                description: 'Objective building - player must reach this'
+            },
+            'GATEHOUSE': {
+                label: 'Gatehouse',
+                category: 'Fortifications',
+                description: 'Gate in walls - can be opened/closed'
+            }
+        };
+        return info[buildingType] || { label: buildingType, category: 'Unknown', description: '' };
     }
 };
 

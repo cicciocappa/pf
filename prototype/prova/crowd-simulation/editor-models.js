@@ -11,13 +11,14 @@ import { GeometryFactory, pointInPolygon, pointInPolygonArray, distPointToSegmen
 export class Building {
     constructor(data = {}) {
         this.id = data.id;
-        this.templateId = data.templateId || 'ngon_4';
+        // buildingType: tipo dell'edificio (corrisponde alla cartella GLTF)
+        this.buildingType = data.buildingType || data.templateId || 'GUARD_TOWER';
         this.type = 'building';
         this.label = data.label || '';
         this.position = data.position || { x: 0, y: 0 };
         this.rotation = data.rotation || 0;
-        this.scaleX = data.scaleX || 5;
-        this.scaleY = data.scaleY || 5;
+        // Scala uniforme (singolo valore applicato a tutte le dimensioni)
+        this.scale = data.scale || data.scaleX || 5;
         this.vertices = data.vertices ? [...data.vertices] : [];
         this.baseVertices = [];
 
@@ -31,11 +32,7 @@ export class Building {
     }
 
     getTemplateVertices() {
-        if (this.templateId.startsWith('ngon_')) {
-            const sides = parseInt(this.templateId.split('_')[1]);
-            return GeometryFactory.createNGon(sides);
-        }
-        return GeometryFactory.getTemplate(this.templateId);
+        return GeometryFactory.getTemplate(this.buildingType);
     }
 
     regenerateBase() {
@@ -44,8 +41,9 @@ export class Building {
         const sin = Math.sin(this.rotation);
 
         this.baseVertices = localTemplate.map((v, index) => {
-            let x = v.x * this.scaleX;
-            let y = v.y * this.scaleY;
+            // Scala uniforme
+            let x = v.x * this.scale;
+            let y = v.y * this.scale;
             const vertexId = `v_${index}`;
             return {
                 id: vertexId,
@@ -77,12 +75,11 @@ export class Building {
     toJSON() {
         return {
             id: this.id,
-            templateId: this.templateId,
+            buildingType: this.buildingType,
             label: this.label,
             position: { ...this.position },
             rotation: this.rotation,
-            scaleX: this.scaleX,
-            scaleY: this.scaleY,
+            scale: this.scale,
             vertices: this.vertices.map(v => ({ x: v.x, y: v.y }))
         };
     }
@@ -90,12 +87,13 @@ export class Building {
     static fromJSON(json) {
         return new Building({
             id: json.id,
-            templateId: json.templateId,
+            // Retrocompatibilità: supporta sia buildingType che templateId
+            buildingType: json.buildingType || json.templateId,
             label: json.label,
             position: json.position,
             rotation: json.rotation,
-            scaleX: json.scaleX,
-            scaleY: json.scaleY
+            // Retrocompatibilità: supporta sia scale che scaleX
+            scale: json.scale || json.scaleX
         });
     }
 }

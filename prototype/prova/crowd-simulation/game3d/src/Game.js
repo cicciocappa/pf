@@ -50,6 +50,9 @@ import { Wizard } from './Wizard.js';
 import { Creature } from './Creature.js';
 import { Tower } from './Tower.js';
 import { Projectile } from './Projectile.js';
+import { Building } from './Building.js';
+import { assetManager } from './AssetManager.js';
+import { BuildingState } from './data/buildingCatalog.js';
 
 import {
     EntityState,
@@ -75,8 +78,13 @@ export class Game {
         this.wizard = null;
         this.creatures = [];
         this.towers = [];
+        this.buildings = new Map(); // id → Building
         this.projectiles = [];
         this.effects = [];
+
+        // NavMesh update dinamico
+        this.navmeshDirty = false;
+        this.navmeshUpdateTimer = 0;
 
         // Treasure
         this.treasurePos = null;
@@ -195,6 +203,14 @@ export class Game {
             }
         }
 
+        // Edifici con sistema di danneggiamento (dal nuovo formato JSON)
+        if (json.buildings) {
+            this._loadBuildings(json.buildings);
+        } else {
+            // Retrocompatibilità: estrai edifici dalle structures
+            this._loadBuildingsFromStructures(json.structures);
+        }
+
         // Tesoro (se specificato)
         if (json.treasure) {
             this.treasurePos = { x: json.treasure[0], z: json.treasure[2] };
@@ -228,6 +244,12 @@ export class Game {
         this.victory = false;
         this.treasurePos = null;
         this.treasureMesh = null;
+
+        // Pulisci edifici
+        this.buildings.forEach(b => b.dispose());
+        this.buildings.clear();
+        this.navmeshDirty = false;
+        this.navmeshUpdateTimer = 0;
     }
 
     _createTreasureMesh(x, z) {
@@ -476,6 +498,16 @@ export class Game {
 
         for (const c of this.creatures) c.update(dt);
         for (const t of this.towers) t.update(dt);
+        this.buildings.forEach(b => b.update(dt));
+
+        // Rigenera navmesh se necessario (con delay per batching)
+        if (this.navmeshDirty) {
+            this.navmeshUpdateTimer -= dt;
+            if (this.navmeshUpdateTimer <= 0) {
+                this._regenerateNavmesh();
+                this.navmeshDirty = false;
+            }
+        }
 
         // Torri sparano
         this._updateTowersFiring(dt);
@@ -875,5 +907,356 @@ export class Game {
         }
 
         return { renderVertices: [], renderPolygons: [] };
+    }
+
+    // ========================================
+    // Building System
+    // ========================================
+
+    /**
+     * Carica edifici dal nuovo formato JSON (con buildingType e scale)
+     */
+    _loadBuildings(buildingsData) {
+        for (const def of buildingsData) {
+            this._createBuilding(def);
+        }
+        console.log(`  Edifici caricati: ${this.buildings.size}`);
+    }
+
+    /**
+     * Retrocompatibilità: estrai edifici dalle structures
+     * Mappa i vecchi templateId ai nuovi buildingType
+     */
+    _loadBuildingsFromStructures(structures) {
+        if (!structures) return;
+
+        // Mappa retrocompatibilità templateId → buildingType
+        const templateMap = {
+            // Torri
+            'TOWER': 'GUARD_TOWER',
+            'GUARD_TOWER': 'GUARD_TOWER',
+            'MAGIC_TOWER': 'GUARD_TOWER',
+            'BALLISTA_TOWER': 'BALLISTA_TOWER',
+            'ARCHERY_TOWER': 'GUARD_TOWER',
+            'WATCHTOWER': 'GUARD_TOWER',
+            // Militari
+            'BARRACKS': 'BARRACKS',
+            'ARCHERY_RANGE': 'BARRACKS',
+            'STABLE': 'BARRACKS',
+            'ARMORY': 'BARRACKS',
+            'SIEGE_WORKSHOP': 'BARRACKS',
+            // Speciali
+            'TEMPLE': 'TEMPLE',
+            'ALTAR': 'TEMPLE',
+            'MAGE_GUILD': 'TEMPLE',
+            'TREASURY': 'TREASURY',
+            'OBSERVATORY': 'TREASURY',
+            // Fortificazioni
+            'GATEHOUSE': 'GATEHOUSE',
+            'BASTION': 'GATEHOUSE',
+            'CORNER_TOWER': 'GUARD_TOWER',
+            // Default per altri
+            'DRAGON_PIT': 'TEMPLE',
+            'CRYSTAL_SPIRE': 'TEMPLE',
+            'SMALL_HOUSE': 'BARRACKS',
+            'LARGE_HOUSE': 'BARRACKS',
+            'MANOR': 'BARRACKS',
+            'LONG_HALL': 'BARRACKS',
+            'BLACKSMITH': 'BARRACKS',
+            'MILL': 'BARRACKS',
+            'GRANARY': 'BARRACKS',
+            'LUMBER_MILL': 'BARRACKS',
+            'MINE_ENTRANCE': 'BARRACKS',
+            'TAVERN': 'BARRACKS',
+            'MARKETPLACE': 'BARRACKS',
+        };
+
+        let buildingCount = 0;
+
+        for (const struct of structures) {
+            if (struct.type !== 'building') continue;
+
+            // Estrai buildingType dal templateId o usa default
+            const templateId = struct.buildingType || struct.templateId || 'GUARD_TOWER';
+            const buildingType = templateMap[templateId] || 'GUARD_TOWER';
+
+            // Calcola posizione dal centro dei vertici (se disponibili)
+            let position;
+            if (struct.position) {
+                position = [struct.position.x, struct.position.y || struct.position.z];
+            } else if (struct.vertices && struct.vertices.length > 0) {
+                // Centro dei vertici
+                let cx = 0, cz = 0;
+                const verts = struct.vertices;
+                for (const v of verts) {
+                    cx += v.x;
+                    cz += v.y; // In editor 2D, y è z nel mondo 3D
+                }
+                position = [cx / verts.length, cz / verts.length];
+            } else {
+                continue; // Skip se non abbiamo posizione
+            }
+
+            const def = {
+                id: struct.id || `bldg_${buildingCount}`,
+                buildingType: buildingType,
+                position: position,
+                rotation: struct.rotation || 0,
+                scale: struct.scale || struct.scaleX || 5,
+            };
+
+            this._createBuilding(def);
+            buildingCount++;
+        }
+
+        if (buildingCount > 0) {
+            console.log(`  Edifici estratti da structures: ${buildingCount}`);
+        }
+    }
+
+    /**
+     * Crea un singolo edificio e lo aggiunge alla scena
+     */
+    _createBuilding(definition) {
+        const building = new Building(definition);
+
+        // Callback per quando l'edificio viene distrutto
+        building.onStateChange = (bldg, oldState, newState) => {
+            if (newState === BuildingState.DESTROYED) {
+                this._onBuildingDestroyed(bldg);
+            }
+        };
+
+        // Crea visual e aggiungi alla scena
+        const visual = building.createVisual(this.sceneManager.scene);
+        this.sceneManager.entityGroup.add(visual);
+
+        this.buildings.set(definition.id, building);
+        return building;
+    }
+
+    /**
+     * Chiamato quando un edificio viene distrutto
+     */
+    _onBuildingDestroyed(building) {
+        console.log(`Edificio distrutto: ${building.buildingId}`);
+
+        // Marca navmesh per rigenerazione (con delay per batching)
+        this.navmeshDirty = true;
+        this.navmeshUpdateTimer = 0.5; // 500ms delay
+
+        // Se l'edificio è un obiettivo (TREASURY), il giocatore vince
+        if (building.catalogEntry.isObjective) {
+            console.log('Obiettivo distrutto!');
+            // Potremmo voler gestire diversamente (es. condizione di sconfitta per il difensore)
+        }
+    }
+
+    /**
+     * Rigenera la navmesh tenendo conto degli edifici distrutti
+     */
+    async _regenerateNavmesh() {
+        console.log('Rigenerazione navmesh...');
+
+        // Ricombina i dati mesh escludendo edifici distrutti
+        const combined = this._combineMeshDataDynamic();
+        if (!combined || combined.positions.length < 9) {
+            console.warn('Mesh combinata non valida per rigenerazione');
+            return;
+        }
+
+        try {
+            const navMesh = this._generateNavMeshMultiAgent(combined.positions, combined.indices);
+
+            // Imposta flags sulle polys
+            for (const tileId of Object.keys(navMesh.tiles)) {
+                const tile = navMesh.tiles[tileId];
+                for (let i = 0; i < tile.polys.length; i++) {
+                    tile.polys[i].flags = i + 1;
+                    const nodeIdx = tile.polyNodes[i];
+                    navMesh.nodes[nodeIdx].flags = i + 1;
+                }
+            }
+
+            // Off-mesh connections
+            const offMeshConnections = this.structuredMeshData.offMeshConnections || [];
+            for (const conn of offMeshConnections) {
+                addOffMeshConnection(navMesh, {
+                    start: conn.start,
+                    end: conn.end,
+                    radius: conn.radius || 0.5,
+                    direction: conn.bidirectional
+                        ? OffMeshConnectionDirection.BIDIRECTIONAL
+                        : OffMeshConnectionDirection.START_TO_END,
+                    flags: 0xffffff,
+                    area: 0,
+                });
+            }
+
+            // Flood fill pruning
+            this._floodFillPruneNavMesh(navMesh, this.structuredMeshData.seedPoints || []);
+
+            // Aggiorna crowd system
+            this.navMesh = navMesh;
+            this.crowdSystem.updateNavMesh(navMesh);
+
+            // Aggiorna visualizzazione navmesh (debug)
+            const { renderVertices, renderPolygons } = this._extractRenderDataFrom(navMesh);
+            this.sceneManager.rebuildNavMeshGeometry(renderVertices, renderPolygons);
+
+            console.log('Navmesh rigenerata con successo');
+
+        } catch (e) {
+            console.error('Errore rigenerazione navmesh:', e);
+        }
+    }
+
+    /**
+     * Combina mesh data escludendo edifici distrutti
+     */
+    _combineMeshDataDynamic() {
+        const data = this.structuredMeshData;
+        if (!data) return null;
+
+        const positions = [];
+        const indices = [];
+
+        // Ground
+        for (let i = 0; i < data.ground.positions.length; i++) {
+            positions.push(data.ground.positions[i]);
+        }
+        for (let i = 0; i < data.ground.indices.length; i++) {
+            indices.push(data.ground.indices[i]);
+        }
+
+        // Structures (filtra in base allo stato degli edifici)
+        for (const s of data.structures) {
+            // Controlla se questo è un edificio distrutto
+            const building = this.buildings.get(s.id);
+            if (building && building.buildingState === BuildingState.DESTROYED) {
+                // Skip: edificio distrutto, non blocca più la navmesh
+                continue;
+            }
+
+            const offset = positions.length / 3;
+            for (let i = 0; i < s.positions.length; i++) {
+                positions.push(s.positions[i]);
+            }
+            for (let i = 0; i < s.indices.length; i++) {
+                indices.push(s.indices[i] + offset);
+            }
+        }
+
+        // Static obstacles
+        if (data.staticObstacles && data.staticObstacles.positions.length > 0) {
+            const offset = positions.length / 3;
+            for (let i = 0; i < data.staticObstacles.positions.length; i++) {
+                positions.push(data.staticObstacles.positions[i]);
+            }
+            for (let i = 0; i < data.staticObstacles.indices.length; i++) {
+                indices.push(data.staticObstacles.indices[i] + offset);
+            }
+        }
+
+        return { positions, indices };
+    }
+
+    /**
+     * Flood fill pruning su una navmesh specifica
+     */
+    _floodFillPruneNavMesh(navMesh, seedPoints) {
+        if (!seedPoints || seedPoints.length === 0) return;
+
+        const halfExtents = [1, 1, 1];
+        const startRefs = [];
+
+        for (const sp of seedPoints) {
+            const result = findNearestPoly(
+                createFindNearestPolyResult(),
+                navMesh,
+                sp,
+                halfExtents,
+                DEFAULT_QUERY_FILTER
+            );
+            if (result.nodeRef !== 0) {
+                startRefs.push(result.nodeRef);
+            }
+        }
+
+        if (startRefs.length === 0) return;
+
+        const { unreachable } = floodFillNavMesh(navMesh, startRefs);
+
+        for (const nodeRef of unreachable) {
+            const node = getNodeByRef(navMesh, nodeRef);
+            node.flags = 0;
+            const tile = navMesh.tiles[node.tileId];
+            tile.polys[node.polyIndex].flags = 0;
+        }
+    }
+
+    /**
+     * Estrae dati di rendering da una navmesh specifica
+     */
+    _extractRenderDataFrom(navMesh) {
+        const renderVertices = [];
+        const renderPolygons = [];
+
+        for (const tileId of Object.keys(navMesh.tiles)) {
+            const tile = navMesh.tiles[tileId];
+            const verts = tile.vertices;
+
+            for (let i = 0; i < tile.polys.length; i++) {
+                const poly = tile.polys[i];
+                renderPolygons.push({
+                    vertices: poly.vertices.slice(),
+                    neis: poly.neis ? poly.neis.slice() : [],
+                    area: poly.area,
+                    flags: poly.flags,
+                });
+            }
+
+            return { renderVertices: verts, renderPolygons };
+        }
+
+        return { renderVertices: [], renderPolygons: [] };
+    }
+
+    /**
+     * Ottiene un edificio per ID
+     */
+    getBuilding(id) {
+        return this.buildings.get(id);
+    }
+
+    /**
+     * Infligge danno a un edificio
+     */
+    damageBuilding(id, amount) {
+        const building = this.buildings.get(id);
+        if (building) {
+            building.takeDamage(amount);
+        }
+    }
+
+    /**
+     * Trova l'edificio più vicino a una posizione
+     */
+    findNearestBuilding(x, z, maxDist = Infinity) {
+        let nearest = null;
+        let nearestDist = maxDist;
+
+        this.buildings.forEach(building => {
+            if (!building.alive) return;
+            const dx = building.x - x;
+            const dz = building.z - z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < nearestDist) {
+                nearestDist = dist;
+                nearest = building;
+            }
+        });
+
+        return nearest;
     }
 }

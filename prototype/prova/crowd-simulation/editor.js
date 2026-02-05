@@ -239,30 +239,19 @@ class NavMeshEditor {
         const container = document.getElementById('templateList');
         if (!container) return;
 
-        // N-gon buttons
-        for (let n = 3; n <= 12; n++) {
-            const btn = document.createElement('button');
-            btn.textContent = `${n}-gon`;
-            btn.className = 'tmpl-btn';
-            btn.addEventListener('click', () => {
-                const bt = this.tools.building;
-                bt.currentTemplateId = 'ngon';
-                bt.sides = n;
-                this._updateTemplateHighlight(`ngon_${n}`);
-            });
-            container.appendChild(btn);
-        }
-
-        // Named templates
+        // Building type buttons
         const templates = GeometryFactory.getAvailableTemplates();
-        for (const tmpl of templates) {
+        for (let i = 0; i < templates.length; i++) {
+            const tmpl = templates[i];
+            const info = GeometryFactory.getBuildingInfo(tmpl);
             const btn = document.createElement('button');
-            btn.textContent = tmpl.replace(/_/g, ' ');
+            btn.textContent = `${i + 1}. ${info.label}`;
             btn.className = 'tmpl-btn';
             btn.dataset.template = tmpl;
+            btn.title = info.description;
             btn.addEventListener('click', () => {
                 const bt = this.tools.building;
-                bt.setTemplate(tmpl);
+                bt.setBuildingType(tmpl);
                 this._updateTemplateHighlight(tmpl);
             });
             container.appendChild(btn);
@@ -582,10 +571,11 @@ class NavMeshEditor {
         html += `<div class="prop-row"><span class="prop-label">ID:</span><span class="prop-value">${obj.id}</span></div>`;
 
         if (obj.type === 'building') {
-            html += `<div class="prop-row"><span class="prop-label">Template:</span><span class="prop-value">${obj.templateId}</span></div>`;
+            const info = GeometryFactory.getBuildingInfo(obj.buildingType);
+            html += `<div class="prop-row"><span class="prop-label">Type:</span><span class="prop-value">${info.label}</span></div>`;
             html += `<div class="prop-row"><span class="prop-label">Position:</span><span class="prop-value">${Math.round(obj.position.x)}, ${Math.round(obj.position.y)}</span></div>`;
             html += `<div class="prop-row"><span class="prop-label">Rotation:</span><span class="prop-value">${Math.round(obj.rotation * 180 / Math.PI)}°</span></div>`;
-            html += `<div class="prop-row"><span class="prop-label">Scale:</span><span class="prop-value">${Math.round(obj.scaleX)} x ${Math.round(obj.scaleY)}</span></div>`;
+            html += `<div class="prop-row"><span class="prop-label">Scale:</span><span class="prop-value">${obj.scale.toFixed(1)}</span></div>`;
             html += `<div class="prop-row"><span class="prop-label">Vertices:</span><span class="prop-value">${obj.vertices.length}</span></div>`;
         } else if (obj.type === 'wall') {
             html += `<div class="prop-row"><span class="prop-label">Points:</span><span class="prop-value">${obj.points.length}</span></div>`;

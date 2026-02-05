@@ -507,7 +507,7 @@ export function buildNavMesh(editorData, Delaunator, Constrainautor, narrowWidth
     // --- 10. Add building polygons ---
     // Two issues to handle:
     //
-    // A) Winding: Building vertices from createNGon are CCW, same as Delaunator's
+    // A) Winding: Building vertices from GeometryFactory are CCW, same as Delaunator's
     //    terrain triangles. navcat's buildMeshAdjacency detects adjacency only when
     //    shared edges are traversed in opposite directions. Reversing to CW fixes
     //    this (wall units are already CW and work correctly).
