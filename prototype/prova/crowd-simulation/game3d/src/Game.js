@@ -51,6 +51,7 @@ import { Creature } from './Creature.js';
 import { Tower } from './Tower.js';
 import { Projectile } from './Projectile.js';
 import { Building } from './Building.js';
+import { Wall } from './Wall.js';
 import { assetManager } from './AssetManager.js';
 import { BuildingState } from './data/buildingCatalog.js';
 
@@ -64,6 +65,8 @@ import {
     AREA_WALKABLE,
     AREA_WALKABLE_NARROW,
 } from './config.js';
+
+import { computeAttackPositions, distanceToStructureSurface } from './StructureAttackSystem.js';
 
 export class Game {
     constructor(container) {
@@ -79,6 +82,7 @@ export class Game {
         this.creatures = [];
         this.towers = [];
         this.buildings = new Map(); // id → Building
+        this.walls = new Map();     // id → Wall
         this.projectiles = [];
         this.effects = [];
 
@@ -92,6 +96,10 @@ export class Game {
 
         // Selection
         this.selectedCreatures = new Set();
+
+        // Camera mode
+        this.cameraMode = 'follow';        // 'follow' | 'free'
+        this.cameraToggleToWizard = false;  // space toggle
 
         // Dati mesh strutturati (dal JSON dell'editor)
         this.structuredMeshData = null;
@@ -107,7 +115,12 @@ export class Game {
     // Caricamento livello dall'editor JSON
     // ========================================
 
-    loadLevel(json) {
+    /**
+     * Carica un livello dal JSON
+     * @param {Object} json - Dati del livello
+     * @param {string} levelName - Nome del livello (es. "level01") per caricare assets correlati
+     */
+    async loadLevel(json, levelName = 'level01') {
         this._clearAll();
 
         if (!json.ground) {
@@ -116,9 +129,13 @@ export class Game {
         }
 
         console.log('loadLevel: inizio caricamento...');
+        console.log('  levelName:', levelName);
         console.log('  ground vertices:', json.ground.positions.length / 3);
         console.log('  structures:', json.structures?.length || 0);
         console.log('  startingPosition:', json.startingPosition);
+
+        // Costruisci il terreno visivo
+        await this.sceneManager.buildTerrain(levelName, json.boundaries || []);
 
         this.structuredMeshData = json;
 
@@ -211,6 +228,11 @@ export class Game {
             this._loadBuildingsFromStructures(json.structures);
         }
 
+        // Mura distruttibili (dal nuovo formato JSON)
+        if (json.walls && json.walls.length > 0) {
+            this._loadWalls(json.walls);
+        }
+
         // Tesoro (se specificato)
         if (json.treasure) {
             this.treasurePos = { x: json.treasure[0], z: json.treasure[2] };
@@ -231,6 +253,7 @@ export class Game {
 
     _clearAll() {
         // Rimuovi entità dalla scena
+        this.sceneManager._clearGroup(this.sceneManager.terrainGroup);
         this.sceneManager._clearGroup(this.sceneManager.entityGroup);
         this.sceneManager._clearGroup(this.sceneManager.projectileGroup);
         this.sceneManager._clearGroup(this.sceneManager.effectGroup);
@@ -248,6 +271,11 @@ export class Game {
         // Pulisci edifici
         this.buildings.forEach(b => b.dispose());
         this.buildings.clear();
+
+        // Pulisci mura
+        this.walls.forEach(w => w.dispose());
+        this.walls.clear();
+
         this.navmeshDirty = false;
         this.navmeshUpdateTimer = 0;
     }
@@ -289,6 +317,8 @@ export class Game {
 
     onRightClick(worldPos) {
         if (!this.wizard || !this.wizard.alive) return;
+        this.cameraMode = 'follow';
+        this.cameraToggleToWizard = false;
 
         if (this.selectedCreatures.size === 0) {
             // Nessuna selezione: muovi solo il mago
@@ -308,7 +338,9 @@ export class Game {
                 const t = targets[i];
                 this.crowdSystem.requestMove(c, t.x, t.z);
                 c.state = EntityState.MOVING;
-                if (c.attackTarget) c.attackTarget = null;
+                c.attackTarget = null;
+                c.isAttackMoving = false;
+                c.forceAttack = false;
             }
         }
     }
@@ -357,20 +389,41 @@ export class Game {
     }
 
     _orderAttack(target) {
-        for (const c of this.creatures) {
-            if (!c.alive) continue;
-            c.attackTarget = target;
-            c.state = EntityState.MOVING;
+        this.onRightClickAttack(target, false);
+    }
 
-            if (c.crowdAgentId != null) {
-                this.crowdSystem.requestMove(c, target.x, target.z);
-            }
+    onRightClickAttack(target, forceAttack) {
+        this.cameraMode = 'follow';
+        this.cameraToggleToWizard = false;
+
+        const units = this.selectedCreatures.size > 0
+            ? [...this.selectedCreatures].filter(c => c.alive && c.crowdAgentId != null)
+            : [];
+        if (units.length === 0) return;
+
+        const positions = computeAttackPositions(target, units, forceAttack);
+
+        for (let i = 0; i < units.length; i++) {
+            const c = units[i];
+            const pos = positions[i];
+            if (!pos) continue;
+
+            c.attackTarget = target;
+            c.forceAttack = forceAttack;
+            c.isAttackMoving = true;
+            c.state = EntityState.MOVING;
+            this.crowdSystem.requestMove(c, pos.x, pos.z);
         }
-        console.log(`Creature ordinate ad attaccare: ${target.towerType} [HP: ${target.hp}]`);
     }
 
     _findEntityAt(wx, wz, faction) {
-        const entities = faction === 'enemy' ? this.towers : [this.wizard, ...this.creatures];
+        const entities = [];
+        if (faction === 'enemy') {
+            entities.push(...this.towers);
+            this.buildings.forEach(b => { if (b.faction === 'enemy') entities.push(b); });
+        } else {
+            entities.push(this.wizard, ...this.creatures);
+        }
         let closest = null;
         let closestDist = 1.5; // raggio di selezione max
 
@@ -393,6 +446,7 @@ export class Game {
 
     selectCreature(creature, additive = false) {
         if (!additive) this.deselectAll();
+        this.cameraToggleToWizard = false;
         if (creature && creature.alive) {
             this.selectedCreatures.add(creature);
             creature.setSelected(true);
@@ -401,6 +455,7 @@ export class Game {
 
     selectCreatures(creatures, additive = false) {
         if (!additive) this.deselectAll();
+        this.cameraToggleToWizard = false;
         for (const c of creatures) {
             if (c && c.alive) {
                 this.selectedCreatures.add(c);
@@ -410,6 +465,7 @@ export class Game {
     }
 
     deselectAll() {
+        this.cameraToggleToWizard = false;
         for (const c of this.selectedCreatures) {
             c.setSelected(false);
         }
@@ -418,6 +474,7 @@ export class Game {
 
     selectAllOfType(creatureType) {
         this.deselectAll();
+        this.cameraToggleToWizard = false;
         for (const c of this.creatures) {
             if (c.alive && c.creatureType === creatureType) {
                 this.selectedCreatures.add(c);
@@ -476,6 +533,39 @@ export class Game {
     }
 
     // ========================================
+    // Camera follow target
+    // ========================================
+
+    getCameraFollowTarget() {
+        // Space toggle: guarda il mago anche se non selezionato
+        if (this.cameraToggleToWizard && this.wizard && this.wizard.alive) {
+            return { x: this.wizard.x, z: this.wizard.z };
+        }
+
+        // Selezione attiva: centro di massa pesato per HP
+        if (this.selectedCreatures.size > 0) {
+            let totalWeight = 0, wx = 0, wz = 0;
+            for (const c of this.selectedCreatures) {
+                if (!c.alive) continue;
+                let weight = c.hp;
+                if (c === this.wizard) weight *= 10; // mago pesa molto di più
+                wx += c.x * weight;
+                wz += c.z * weight;
+                totalWeight += weight;
+            }
+            if (totalWeight > 0) {
+                return { x: wx / totalWeight, z: wz / totalWeight };
+            }
+        }
+
+        // Fallback: segui il mago
+        if (this.wizard && this.wizard.alive) {
+            return { x: this.wizard.x, z: this.wizard.z };
+        }
+        return null;
+    }
+
+    // ========================================
     // Update loop
     // ========================================
 
@@ -499,6 +589,7 @@ export class Game {
         for (const c of this.creatures) c.update(dt);
         for (const t of this.towers) t.update(dt);
         this.buildings.forEach(b => b.update(dt));
+        this.walls.forEach(w => w.update(dt));
 
         // Rigenera navmesh se necessario (con delay per batching)
         if (this.navmeshDirty) {
@@ -533,12 +624,13 @@ export class Game {
         // Anima tesoro
         this._animateTreasure(dt);
 
-        // Camera segue il mago
-        if (this.wizard && this.wizard.alive) {
-            this.sceneManager.centerCameraOn(this.wizard.x, this.wizard.z);
+        // Camera segue la selezione
+        if (this.cameraMode === 'follow') {
+            const target = this.getCameraFollowTarget();
+            if (target) {
+                this.sceneManager.setCameraDesiredTarget(target.x, target.z);
+            }
         }
-
-        // Camera update
         this.sceneManager.updateCamera(dt);
 
         // HUD
@@ -573,15 +665,15 @@ export class Game {
 
     _updateCreatureAttacks(dt) {
         for (const c of this.creatures) {
-            if (!c.alive || !c.attackTarget || !c.attackTarget.alive) continue;
-
-            const dx = c.attackTarget.x - c.x;
-            const dz = c.attackTarget.z - c.z;
-            const dist = Math.sqrt(dx * dx + dz * dz);
-
-            if (dist <= c.attackRange) {
-                c.state = EntityState.ATTACKING;
-            } else {
+            if (!c.alive || !c.attackTarget) continue;
+            if (!c.attackTarget.alive) {
+                c.attackTarget = null;
+                c.isAttackMoving = false;
+                if (c.state === EntityState.ATTACKING) c.state = EntityState.IDLE;
+                continue;
+            }
+            const dist = distanceToStructureSurface(c.x, c.z, c.attackTarget);
+            if (dist > c.attackRange && c.state !== EntityState.ATTACKING) {
                 if (c.crowdAgentId != null) {
                     this.crowdSystem.requestMove(c, c.attackTarget.x, c.attackTarget.z);
                 }
@@ -910,6 +1002,86 @@ export class Game {
     }
 
     // ========================================
+    // Wall System
+    // ========================================
+
+    /**
+     * Carica mura distruttibili dal JSON
+     */
+    _loadWalls(wallsData) {
+        for (const def of wallsData) {
+            const wall = new Wall(def);
+
+            // Campiona altezze terreno
+            wall.sampleTerrainHeights((x, z) => this.sceneManager.sampleTerrainHeight(x, z));
+
+            // Costruisci visuals
+            wall.buildVisuals();
+
+            // Callback distruzione unità
+            wall.onUnitDestroyed = (w, unitIndex) => {
+                this._onWallUnitDestroyed(w, unitIndex);
+            };
+
+            // Aggiungi alla scena e alla mappa
+            this.sceneManager.entityGroup.add(wall.group);
+            this.walls.set(def.id, wall);
+        }
+        console.log(`  Mura caricate: ${this.walls.size}`);
+    }
+
+    /**
+     * Chiamato quando un'unità di muro viene distrutta
+     */
+    _onWallUnitDestroyed(wall, unitIndex) {
+        console.log(`Wall unit distrutta: ${wall.id} unit #${unitIndex}`);
+        this.navmeshDirty = true;
+        this.navmeshUpdateTimer = 0.5;
+    }
+
+    /**
+     * Infligge danno al muro più vicino a una posizione
+     * @param {string} wallId - ID del muro
+     * @param {number} x
+     * @param {number} z
+     * @param {number} amount - danno
+     */
+    damageWall(wallId, x, z, amount) {
+        const wall = this.walls.get(wallId);
+        if (!wall) return null;
+        return wall.damageNearestUnit(x, z, amount);
+    }
+
+    /**
+     * Trova l'unità di muro più vicina a una posizione tra tutti i muri
+     * @param {number} x
+     * @param {number} z
+     * @param {number} maxDist
+     * @returns {{wall: Wall, unitIndex: number}|null}
+     */
+    findNearestWallUnit(x, z, maxDist = Infinity) {
+        let nearest = null;
+        let nearestDist = maxDist * maxDist;
+
+        this.walls.forEach(wall => {
+            for (let i = 0; i < wall.units.length; i++) {
+                const unit = wall.units[i];
+                if (unit.hp <= 0) continue;
+                const center = unit.getCenter();
+                const dx = center.x - x;
+                const dz = center.z - z;
+                const dist = dx * dx + dz * dz;
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearest = { wall, unitIndex: i };
+                }
+            }
+        });
+
+        return nearest;
+    }
+
+    // ========================================
     // Building System
     // ========================================
 
@@ -983,7 +1155,8 @@ export class Game {
             // Calcola posizione dal centro dei vertici (se disponibili)
             let position;
             if (struct.position) {
-                position = [struct.position.x, struct.position.y || struct.position.z];
+                // struct.position può essere { x, z } (nuovo formato) o { x, y } (vecchio)
+                position = [struct.position.x, struct.position.z ?? struct.position.y];
             } else if (struct.vertices && struct.vertices.length > 0) {
                 // Centro dei vertici
                 let cx = 0, cz = 0;
@@ -1129,8 +1302,13 @@ export class Game {
             indices.push(data.ground.indices[i]);
         }
 
-        // Structures (filtra in base allo stato degli edifici)
+        // Structures (filtra in base allo stato degli edifici e muri gestiti runtime)
         for (const s of data.structures) {
+            // Skip wall gestite dal sistema runtime
+            if (s.type === 'wall' && this.walls.has(s.id)) {
+                continue;
+            }
+
             // Controlla se questo è un edificio distrutto
             const building = this.buildings.get(s.id);
             if (building && building.buildingState === BuildingState.DESTROYED) {
@@ -1146,6 +1324,15 @@ export class Game {
                 indices.push(s.indices[i] + offset);
             }
         }
+
+        // Proxy mesh delle mura vive (unità non distrutte)
+        this.walls.forEach(wall => {
+            const proxy = wall.buildProxyMeshDataCombined();
+            if (proxy.positions.length === 0) return;
+            const offset = positions.length / 3;
+            for (const p of proxy.positions) positions.push(p);
+            for (const i of proxy.indices) indices.push(i + offset);
+        });
 
         // Static obstacles
         if (data.staticObstacles && data.staticObstacles.positions.length > 0) {

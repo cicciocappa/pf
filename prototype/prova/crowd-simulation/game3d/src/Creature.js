@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { Entity } from './Entity.js';
 import { CreatureType, CreatureStats, EntityState } from './config.js';
+import { distanceToStructureSurface } from './StructureAttackSystem.js';
 
 export class Creature extends Entity {
     constructor(x, z, creatureType) {
@@ -71,12 +72,11 @@ export class Creature extends Entity {
 
         // Se ha un bersaglio e in range, attacca
         if (this.attackTarget && this.attackTarget.alive) {
-            const dx = this.attackTarget.x - this.x;
-            const dz = this.attackTarget.z - this.z;
-            const dist = Math.sqrt(dx * dx + dz * dz);
+            const dist = distanceToStructureSurface(this.x, this.z, this.attackTarget);
 
             if (dist <= this.attackRange) {
                 this.state = EntityState.ATTACKING;
+                this.isAttackMoving = false;
                 if (this.attackCooldownTimer <= 0) {
                     this.attackTarget.takeDamage(this.attackDamage);
                     this.attackCooldownTimer = this.attackCooldown;
@@ -86,6 +86,7 @@ export class Creature extends Entity {
             // Bersaglio morto o assente
             if (this.state === EntityState.ATTACKING) {
                 this.attackTarget = null;
+                this.isAttackMoving = false;
                 this.state = EntityState.IDLE;
             }
         }

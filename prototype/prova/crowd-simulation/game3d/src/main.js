@@ -8,35 +8,37 @@ async function init() {
     const container = document.getElementById('game-container');
     const game = new Game(container);
 
-    // Carica il livello: prima da localStorage, poi da file di esempio
+    // Carica il livello: prima da file, poi da localStorage come fallback
     let levelData = null;
+    let levelName = 'level01';
 
-    // Prova sempre localStorage (l'editor salva qui)
-    const data = localStorage.getItem('editorMesh3D');
-    if (data) {
-        try {
-            levelData = JSON.parse(data);
-            console.log('Livello caricato da localStorage');
-        } catch (e) {
-            console.error('Errore nel parsing della mesh dall\'editor:', e);
+    // Carica il livello da file
+    try {
+        const resp = await fetch(`./levels/${levelName}.json`);
+        if (resp.ok) {
+            levelData = await resp.json();
+            console.log(`Livello caricato da levels/${levelName}.json`);
         }
+    } catch (e) {
+        console.warn('Impossibile caricare il livello da file:', e);
     }
 
+    // Fallback: localStorage (usato dall'editor)
     if (!levelData) {
-        // Prova a caricare un file di esempio
-        try {
-            const resp = await fetch('../sample-mesh3d.json');
-            if (resp.ok) {
-                levelData = await resp.json();
-                console.log('Livello caricato da sample-mesh3d.json');
+        const data = localStorage.getItem('editorMesh3D');
+        if (data) {
+            try {
+                levelData = JSON.parse(data);
+                levelName = 'editor'; // Livello dall'editor, nessun terreno GLB
+                console.log('Livello caricato da localStorage (editor)');
+            } catch (e) {
+                console.error('Errore nel parsing della mesh dall\'editor:', e);
             }
-        } catch (e) {
-            // silenzioso
         }
     }
 
     if (levelData) {
-        game.loadLevel(levelData);
+        await game.loadLevel(levelData, levelName);
     } else {
         console.warn('Nessun livello caricato. Apri l\'editor, crea un livello e clicca "Esporta Mesh 3D", poi ricarica questa pagina.');
     }
@@ -58,6 +60,14 @@ async function init() {
 
     // Esponi per debug
     window.game = game;
+
+    // Debug checkbox
+    const debugCheckbox = document.getElementById('debugCheckbox');
+    if (debugCheckbox) {
+        debugCheckbox.addEventListener('change', (e) => {
+            game.sceneManager.setDebugVisible(e.target.checked);
+        });
+    }
 
     console.log('Tower Attack 3D avviato!');
     console.log('Controlli:');

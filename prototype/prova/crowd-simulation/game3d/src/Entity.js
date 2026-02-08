@@ -35,6 +35,8 @@ export class Entity {
         // Combat
         this.attackTarget = null;
         this.attackCooldownTimer = 0;
+        this.forceAttack = false;      // true = non si disimpegna sotto danno
+        this.isAttackMoving = false;   // true = si sta muovendo verso un bersaglio d'attacco
 
         // Selection
         this.selected = false;
@@ -51,6 +53,11 @@ export class Entity {
         if (this.hp <= 0) {
             this.state = EntityState.DEAD;
             this.onDeath();
+        } else if (this.isAttackMoving && !this.forceAttack) {
+            // Disengage: la creatura si ferma se prende danno durante il movimento
+            this.attackTarget = null;
+            this.isAttackMoving = false;
+            this.state = EntityState.IDLE;
         }
         this._updateHpBar();
     }

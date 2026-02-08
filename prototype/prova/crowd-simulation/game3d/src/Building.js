@@ -74,7 +74,8 @@ export class Building extends Entity {
     createVisual(scene) {
         this.group = new THREE.Group();
         this.group.position.set(this.x, 0, this.z);
-        this.group.rotation.y = this.rotation;
+        // Negare la rotazione: l'editor 2D ha Y verso il basso, Three.js ha Y verso l'alto
+        this.group.rotation.y = -this.rotation;
 
         // HP bar (più in alto per edifici)
         this._createHpBar();
@@ -327,7 +328,8 @@ export class Building extends Entity {
     _syncPosition() {
         if (this.group) {
             this.group.position.set(this.x, 0, this.z);
-            this.group.rotation.y = this.rotation;
+            // Negare la rotazione: l'editor 2D ha Y verso il basso, Three.js ha Y verso l'alto
+            this.group.rotation.y = -this.rotation;
             this.group.visible = this.alive;
         }
     }

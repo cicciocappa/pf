@@ -3,6 +3,7 @@
 // ========================================
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { AREA_WALKABLE_NARROW } from './config.js';
 
 export class SceneManager {
@@ -26,18 +27,23 @@ export class SceneManager {
             1000
         );
 
-        // Posizione isometrica (~55 gradi)
-        const cameraDistance = 50;
-        const cameraAngle = Math.PI / 3.2; // ~56 gradi
+        // Camera orbitale: parametri
+        this.cameraAzimuth = Math.PI / 4;       // 45° — vista isometrica
+        this.cameraElevation = Math.PI / 3.2;   // ~56° elevazione
+        this.cameraDistance = 50;
+        this.cameraRadius = this.cameraDistance * Math.cos(this.cameraElevation) * Math.SQRT2;
+
+        // Posizione isometrica iniziale
         this.camera.position.set(
-            cameraDistance * Math.cos(cameraAngle),
-            cameraDistance * Math.sin(cameraAngle),
-            cameraDistance * Math.cos(cameraAngle)
+            this.cameraRadius * Math.sin(this.cameraAzimuth),
+            this.cameraDistance * Math.sin(this.cameraElevation),
+            this.cameraRadius * Math.cos(this.cameraAzimuth)
         );
         this.camera.lookAt(0, 0, 0);
 
         // Camera target (per pan/follow)
         this.cameraTarget = new THREE.Vector3(0, 0, 0);
+        this.desiredCameraTarget = new THREE.Vector3(0, 0, 0);
 
         // Renderer
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -65,22 +71,32 @@ export class SceneManager {
         this.scene.add(dirLight);
 
         // Groups per organizzare la scena
-        this.levelGroup = new THREE.Group();
-        this.navMeshGroup = new THREE.Group();
+        this.terrainGroup = new THREE.Group();  // Terreno visivo
+        this.levelGroup = new THREE.Group();    // Mesh debug per navmesh
+        this.navMeshGroup = new THREE.Group();  // Visualizzazione navmesh
         this.entityGroup = new THREE.Group();
         this.projectileGroup = new THREE.Group();
         this.effectGroup = new THREE.Group();
 
+        this.scene.add(this.terrainGroup);
         this.scene.add(this.levelGroup);
         this.scene.add(this.navMeshGroup);
         this.scene.add(this.entityGroup);
         this.scene.add(this.projectileGroup);
         this.scene.add(this.effectGroup);
 
+        // Debug: nascondi mesh di debug di default
+        this.levelGroup.visible = false;
+        this.navMeshGroup.visible = false;
+
         // Raycasting
         this.raycaster = new THREE.Raycaster();
         this.groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         this.mouse = new THREE.Vector2();
+
+        // Terrain raycasting (per campionare altezza terreno)
+        this._terrainRaycaster = new THREE.Raycaster();
+        this._terrainDownDir = new THREE.Vector3(0, -1, 0);
 
         // Dati navmesh per rendering
         this.renderVertices = [];
@@ -101,6 +117,11 @@ export class SceneManager {
 
     centerCameraOn(x, z) {
         this.cameraTarget.set(x, 0, z);
+        this.desiredCameraTarget.set(x, 0, z);
+    }
+
+    setCameraDesiredTarget(x, z) {
+        this.desiredCameraTarget.set(x, 0, z);
     }
 
     /**
@@ -140,13 +161,11 @@ export class SceneManager {
      * Posiziona la camera immediatamente sul target (senza lerp).
      */
     snapCameraToTarget() {
-        const cameraDistance = 50;
-        const cameraAngle = Math.PI / 3.2;
-
+        const r = this.cameraRadius;
         this.camera.position.set(
-            this.cameraTarget.x + cameraDistance * Math.cos(cameraAngle),
-            cameraDistance * Math.sin(cameraAngle),
-            this.cameraTarget.z + cameraDistance * Math.cos(cameraAngle)
+            this.cameraTarget.x + r * Math.sin(this.cameraAzimuth),
+            this.cameraDistance * Math.sin(this.cameraElevation),
+            this.cameraTarget.z + r * Math.cos(this.cameraAzimuth)
         );
         this.camera.lookAt(this.cameraTarget);
     }
@@ -155,8 +174,20 @@ export class SceneManager {
      * Pan camera di dx, dz in coordinate mondo.
      */
     panCamera(dx, dz) {
-        this.cameraTarget.x += dx;
-        this.cameraTarget.z += dz;
+        const cos = Math.cos(this.cameraAzimuth);
+        const sin = Math.sin(this.cameraAzimuth);
+        const rx = dx * cos + dz * sin;
+        const rz = -dx * sin + dz * cos;
+        this.cameraTarget.x += rx;
+        this.cameraTarget.z += rz;
+        this.desiredCameraTarget.x += rx;
+        this.desiredCameraTarget.z += rz;
+        this.camera.position.x += rx;
+        this.camera.position.z += rz;
+    }
+
+    rotateCamera(deltaAzimuth) {
+        this.cameraAzimuth += deltaAzimuth;
     }
 
     /**
@@ -171,17 +202,41 @@ export class SceneManager {
      * Aggiorna la camera per seguire il target con smooth lerp.
      */
     updateCamera(dt) {
-        const cameraDistance = 50;
-        const cameraAngle = Math.PI / 3.2;
+        // Smooth target transition
+        this.cameraTarget.lerp(this.desiredCameraTarget, Math.min(1, 3 * dt));
 
+        const r = this.cameraRadius;
         const targetPos = new THREE.Vector3(
-            this.cameraTarget.x + cameraDistance * Math.cos(cameraAngle),
-            cameraDistance * Math.sin(cameraAngle),
-            this.cameraTarget.z + cameraDistance * Math.cos(cameraAngle)
+            this.cameraTarget.x + r * Math.sin(this.cameraAzimuth),
+            this.cameraDistance * Math.sin(this.cameraElevation),
+            this.cameraTarget.z + r * Math.cos(this.cameraAzimuth)
         );
 
         this.camera.position.lerp(targetPos, Math.min(1, 5 * dt));
         this.camera.lookAt(this.cameraTarget);
+    }
+
+    /**
+     * Pan camera da mouse drag — converte pixel in unità mondo.
+     */
+    panCameraScreen(dxPixels, dyPixels) {
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        const wpp = (this.camera.right - this.camera.left) / rect.width;
+
+        const right = new THREE.Vector3();
+        right.setFromMatrixColumn(this.camera.matrixWorld, 0);
+        const up = new THREE.Vector3();
+        up.setFromMatrixColumn(this.camera.matrixWorld, 1);
+
+        const wx = (right.x * dxPixels + up.x * dyPixels) * wpp;
+        const wz = (right.z * dxPixels + up.z * dyPixels) * wpp;
+
+        this.cameraTarget.x += wx;
+        this.cameraTarget.z += wz;
+        this.desiredCameraTarget.x += wx;
+        this.desiredCameraTarget.z += wz;
+        this.camera.position.x += wx;
+        this.camera.position.z += wz;
     }
 
     _updateProjection() {
@@ -198,6 +253,123 @@ export class SceneManager {
         const h = this.container.clientHeight;
         this.renderer.setSize(w, h);
         this._updateProjection();
+    }
+
+    // ========================================
+    // Terrain
+    // ========================================
+
+    /**
+     * Costruisce il terreno visivo.
+     * Prova a caricare un file GLB (es. terrain01.glb), altrimenti crea piani dalle boundaries.
+     * @param {string} levelName - Nome del livello (es. "level01")
+     * @param {Array} boundaries - Array di boundaries dal JSON [{id, vertices: [[x,0,z],...]}]
+     */
+    async buildTerrain(levelName, boundaries) {
+        this._clearGroup(this.terrainGroup);
+
+        // Estrai numero dal nome del livello (level01 -> 01)
+        const levelNum = levelName.replace(/\D/g, '') || '01';
+        const terrainPath = `./levels/terrain${levelNum}.glb`;
+
+        // Prova a caricare il GLB del terreno
+        try {
+            const gltf = await this._loadGLTF(terrainPath);
+            console.log(`Terreno caricato da ${terrainPath}`);
+
+            // Prepara il modello
+            gltf.scene.traverse((child) => {
+                if (child.isMesh) {
+                    child.receiveShadow = true;
+                    child.castShadow = false;
+                }
+            });
+
+            this.terrainGroup.add(gltf.scene);
+            return;
+        } catch (e) {
+            console.log(`Terreno GLB non trovato (${terrainPath}), uso fallback dalle boundaries`);
+        }
+
+        // Fallback: crea piani verdi dalle boundaries
+        if (!boundaries || boundaries.length === 0) {
+            console.warn('Nessuna boundary definita per il terreno');
+            return;
+        }
+
+        for (const boundary of boundaries) {
+            const mesh = this._createTerrainFromBoundary(boundary.vertices);
+            if (mesh) {
+                this.terrainGroup.add(mesh);
+            }
+        }
+    }
+
+    /**
+     * Carica un file GLTF/GLB
+     */
+    _loadGLTF(path) {
+        return new Promise((resolve, reject) => {
+            const loader = new GLTFLoader();
+            loader.load(
+                path,
+                (gltf) => resolve(gltf),
+                undefined,
+                (error) => reject(error)
+            );
+        });
+    }
+
+    /**
+     * Crea una mesh del terreno da una boundary (poligono)
+     * @param {Array} vertices - Array di vertici [[x, 0, z], ...]
+     */
+    _createTerrainFromBoundary(vertices) {
+        if (!vertices || vertices.length < 3) return null;
+
+        // Crea shape 2D per ShapeGeometry (piano XY)
+        // rotateX(-PI/2) trasforma (sx, sy, 0) → (sx, 0, -sy),
+        // quindi neghiamo z per compensare: -(-z) = z
+        const shape = new THREE.Shape();
+        shape.moveTo(vertices[0][0], -vertices[0][2]);
+        for (let i = 1; i < vertices.length; i++) {
+            shape.lineTo(vertices[i][0], -vertices[i][2]);
+        }
+        shape.closePath();
+
+        // Crea geometria dal shape
+        const geometry = new THREE.ShapeGeometry(shape);
+
+        // Ruota per essere orizzontale (da XY a XZ)
+        geometry.rotateX(-Math.PI / 2);
+
+        // Materiale verde erba
+        const material = new THREE.MeshLambertMaterial({
+            color: 0x4a7c39,
+            side: THREE.DoubleSide
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.receiveShadow = true;
+        mesh.position.y = 0.01; // Leggermente sopra Y=0 per evitare z-fighting
+
+        return mesh;
+    }
+
+    /**
+     * Campiona l'altezza del terreno in un punto (x, z) con raycast.
+     * @param {number} x
+     * @param {number} z
+     * @returns {number} altezza Y del terreno, o 0 se nessun hit
+     */
+    sampleTerrainHeight(x, z) {
+        if (this.terrainGroup.children.length === 0) return 0;
+        const origin = new THREE.Vector3(x, 100, z);
+        this._terrainRaycaster.set(origin, this._terrainDownDir);
+        const meshes = [];
+        this.terrainGroup.traverse(obj => { if (obj.isMesh) meshes.push(obj); });
+        const intersects = this._terrainRaycaster.intersectObjects(meshes);
+        return intersects.length > 0 ? intersects[0].point.y : 0;
     }
 
     // ========================================
@@ -564,5 +736,13 @@ export class SceneManager {
     dispose() {
         window.removeEventListener('resize', this._onResize);
         this.renderer.dispose();
+    }
+
+    /**
+     * Mostra/nasconde le mesh di debug (levelGroup e navMeshGroup)
+     */
+    setDebugVisible(visible) {
+        this.levelGroup.visible = visible;
+        this.navMeshGroup.visible = visible;
     }
 }

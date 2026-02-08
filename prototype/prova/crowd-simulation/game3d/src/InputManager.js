@@ -3,6 +3,8 @@
 // RTS-style selection: rect drag, double-click, shift, ESC
 // ========================================
 
+import { findEnemyStructureAt } from './StructureAttackSystem.js';
+
 export class InputManager {
     constructor(sceneManager, game) {
         this.sceneManager = sceneManager;
@@ -25,6 +27,14 @@ export class InputManager {
         this._lastClickPos = null;
         this._doubleClickThreshold = 300; // ms
 
+        // Middle mouse rotation
+        this._rotateStart = null;
+        this._isRotating = false;
+
+        // Middle mouse pan
+        this._panDragPrev = null;
+        this._isMiddlePanning = false;
+
         // Selection rect DOM element
         this._selRect = document.getElementById('selection-rect');
 
@@ -36,12 +46,30 @@ export class InputManager {
         const c = this.canvas;
 
         c.addEventListener('contextmenu', e => e.preventDefault());
+        c.addEventListener('auxclick', e => e.preventDefault());
 
         c.addEventListener('mousedown', e => {
+            if (e.button === 1) {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    // Shift+middle: rotazione
+                    this._rotateStart = { x: e.clientX };
+                    this._isRotating = true;
+                } else {
+                    // Middle: pan
+                    this._panDragPrev = { x: e.clientX, y: e.clientY };
+                    this._isMiddlePanning = true;
+                }
+                return;
+            }
             if (e.button === 2) {
-                // Right click: muovi
+                // Right click: attacca struttura nemica o muovi
                 const worldPos = this.sceneManager.getWorldPosFromMouse(e);
-                if (worldPos) {
+                if (!worldPos) return;
+                const enemy = findEnemyStructureAt(this.game, worldPos.x, worldPos.z);
+                if (enemy) {
+                    this.game.onRightClickAttack(enemy.target, e.shiftKey);
+                } else {
                     this.game.onRightClick(worldPos);
                 }
             } else if (e.button === 0) {
@@ -62,7 +90,31 @@ export class InputManager {
         });
 
         c.addEventListener('mousemove', e => {
-            if (!this._dragStart) return;
+            // Rotazione camera (shift+middle)
+            if (this._isRotating && this._rotateStart) {
+                const dx = e.clientX - this._rotateStart.x;
+                this.sceneManager.rotateCamera(-dx * 0.005);
+                this._rotateStart.x = e.clientX;
+                return;
+            }
+            // Pan camera (middle)
+            if (this._isMiddlePanning && this._panDragPrev) {
+                const dx = e.clientX - this._panDragPrev.x;
+                const dy = e.clientY - this._panDragPrev.y;
+                this.sceneManager.panCameraScreen(-dx, dy);
+                this._panDragPrev.x = e.clientX;
+                this._panDragPrev.y = e.clientY;
+                this.game.cameraMode = 'free';
+                return;
+            }
+
+            if (!this._dragStart) {
+                // Aggiorna cursore contestuale (solo se non in drag/rotate/spell)
+                if (!this._isRotating && !this._isMiddlePanning && !this.activeSpell) {
+                    this._updateCursor(e);
+                }
+                return;
+            }
 
             const dx = e.clientX - this._dragStart.sx;
             const dy = e.clientY - this._dragStart.sy;
@@ -73,6 +125,13 @@ export class InputManager {
         });
 
         c.addEventListener('mouseup', e => {
+            if (e.button === 1) {
+                this._rotateStart = null;
+                this._isRotating = false;
+                this._panDragPrev = null;
+                this._isMiddlePanning = false;
+                return;
+            }
             if (e.button !== 0) return;
 
             if (this._isDragging && this._dragStart) {
@@ -179,6 +238,13 @@ export class InputManager {
         return closest;
     }
 
+    _updateCursor(e) {
+        const worldPos = this.sceneManager.getWorldPosFromMouse(e);
+        if (!worldPos) { this.canvas.style.cursor = 'default'; return; }
+        const enemy = findEnemyStructureAt(this.game, worldPos.x, worldPos.z);
+        this.canvas.style.cursor = enemy ? 'crosshair' : 'default';
+    }
+
     _finishDragSelection(e) {
         const shift = e.shiftKey;
 
@@ -258,6 +324,15 @@ export class InputManager {
                 this.game.onSummonCreature('ELEMENTAL');
             }
 
+            // Space: toggle mago/selezione
+            if (e.key === ' ') {
+                e.preventDefault();
+                if (!this.game.selectedCreatures.has(this.game.wizard)) {
+                    this.game.cameraToggleToWizard = !this.game.cameraToggleToWizard;
+                }
+                this.game.cameraMode = 'follow';
+            }
+
             // ESC: deseleziona tutto + annulla spell
             if (e.key === 'Escape') {
                 this.game.deselectAll();
@@ -274,9 +349,11 @@ export class InputManager {
     /** Chiamato ogni frame per camera pan da WASD */
     update(dt) {
         const panSpeed = 15;
-        if (this.keys['w'] || this.keys['W'] || this.keys['ArrowUp'])    this.sceneManager.panCamera(0, -panSpeed * dt);
-        if (this.keys['s'] || this.keys['S'] || this.keys['ArrowDown'])  this.sceneManager.panCamera(0, panSpeed * dt);
-        if (this.keys['a'] || this.keys['A'] || this.keys['ArrowLeft'])  this.sceneManager.panCamera(-panSpeed * dt, 0);
-        if (this.keys['d'] || this.keys['D'] || this.keys['ArrowRight']) this.sceneManager.panCamera(panSpeed * dt, 0);
+        let panning = false;
+        if (this.keys['w'] || this.keys['W'] || this.keys['ArrowUp'])    { this.sceneManager.panCamera(0, -panSpeed * dt); panning = true; }
+        if (this.keys['s'] || this.keys['S'] || this.keys['ArrowDown'])  { this.sceneManager.panCamera(0, panSpeed * dt); panning = true; }
+        if (this.keys['a'] || this.keys['A'] || this.keys['ArrowLeft'])  { this.sceneManager.panCamera(-panSpeed * dt, 0); panning = true; }
+        if (this.keys['d'] || this.keys['D'] || this.keys['ArrowRight']) { this.sceneManager.panCamera(panSpeed * dt, 0); panning = true; }
+        if (panning) this.game.cameraMode = 'free';
     }
 }

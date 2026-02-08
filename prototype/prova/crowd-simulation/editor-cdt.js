@@ -909,7 +909,12 @@ export function exportMesh3D(editorData) {
         structures.push({
             id: bldg.id,
             type: 'building',
+            buildingType: bldg.buildingType,
             label: bldg.label || '',
+            // Posizione in coordinate 3D: [x, 0, z] dove z = y dell'editor
+            position: { x: bldg.position.x, z: bldg.position.y },
+            rotation: bldg.rotation,
+            scale: bldg.scale,
             positions: pos,
             indices: idx
         });
@@ -940,6 +945,41 @@ export function exportMesh3D(editorData) {
         }
     });
 
+    // --- 2b. Wall metadata per unità distruttibili ---
+    const wallsMetadata = [];
+    editorData.walls.forEach(wall => {
+        const tp = wall.calculateThicknessPoints();
+        if (tp.length < 2) return;
+        // Apply cap overrides (stessa logica del blocco structures sopra)
+        if (wall.startCapOverride) {
+            tp[0].left = { ...wall.startCapOverride.left };
+            tp[0].right = { ...wall.startCapOverride.right };
+        }
+        if (wall.endCapOverride) {
+            tp[tp.length - 1].left = { ...wall.endCapOverride.left };
+            tp[tp.length - 1].right = { ...wall.endCapOverride.right };
+        }
+        const units = wall.generateDestructibleUnits();
+        wallsMetadata.push({
+            id: wall.id,
+            wallType: wall.wallType || 'STONE',
+            thickness: wall.thickness,
+            height: wall.height || 3.0,
+            label: wall.label || '',
+            startConnected: !!wall.startCapOverride,
+            endConnected: !!wall.endCapOverride,
+            units: units.map(u => ({
+                id: u.id,
+                vertices: u.vertices.map(v => ({ x: v.x, z: v.y })) // 2D→3D
+            })),
+            thicknessPoints: tp.map(p => ({
+                center: { x: p.center.x, z: p.center.y },
+                left: { x: p.left.x, z: p.left.y },
+                right: { x: p.right.x, z: p.right.y },
+            })),
+        });
+    });
+
     // --- 3. Static obstacles: combinati in un unico chunk ---
     const obsPositions = [];
     const obsIndices = [];
@@ -966,13 +1006,21 @@ export function exportMesh3D(editorData) {
         ? [editorData.startingPosition[0], 0, editorData.startingPosition[1]]
         : null;
 
+    // --- 7. Boundaries per terreno (convertite in 3D) ---
+    const boundaries3D = editorData.boundaries.map(b => ({
+        id: b.id,
+        vertices: b.vertices.map(v => [v[0], 0, v[1]])
+    }));
+
     return {
         ground: { positions: groundPositions, indices: groundIndices },
         structures,
+        walls: wallsMetadata,
         staticObstacles: { positions: obsPositions, indices: obsIndices },
         offMeshConnections: outLinks,
         seedPoints: seedPoints3D,
-        startingPosition
+        startingPosition,
+        boundaries: boundaries3D
     };
 }
 

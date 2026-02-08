@@ -107,6 +107,8 @@ export class Wall {
         this.points = options.points || [];
         this.thickness = options.thickness || 2;
         this.maxSegmentLength = options.maxSegmentLength || 3;
+        this.height = options.height || 3.0;
+        this.wallType = options.wallType || 'STONE';
         this.type = 'wall';
         this.label = options.label || '';
         this.units = [];
@@ -314,7 +316,9 @@ export class Wall {
             label: this.label,
             points: this.points.map(p => ({ ...p })),
             thickness: this.thickness,
-            maxSegmentLength: this.maxSegmentLength
+            maxSegmentLength: this.maxSegmentLength,
+            height: this.height,
+            wallType: this.wallType
         };
     }
 
@@ -327,7 +331,9 @@ export class Wall {
             id: json.id, label: json.label,
             points: points,
             thickness: json.thickness,
-            maxSegmentLength: json.maxSegmentLength
+            maxSegmentLength: json.maxSegmentLength,
+            height: json.height,
+            wallType: json.wallType
         });
     }
 }

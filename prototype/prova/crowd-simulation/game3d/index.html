@@ -135,6 +135,29 @@
         }
         .help-panel b { color: #ccc; }
 
+        /* Debug panel */
+        .debug-panel {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 11px;
+            color: #aaa;
+            pointer-events: auto;
+        }
+        .debug-panel label {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .debug-panel input[type="checkbox"] {
+            cursor: pointer;
+        }
+
         /* Selection rectangle */
         #selection-rect {
             position: absolute;
@@ -172,6 +195,13 @@
 
         <!-- Selection rectangle overlay -->
         <div id="selection-rect"></div>
+
+        <!-- Debug checkbox -->
+        <div class="debug-panel">
+            <label>
+                <input type="checkbox" id="debugCheckbox"> Debug mesh
+            </label>
+        </div>
 
         <!-- Controls help -->
         <div class="help-panel">
